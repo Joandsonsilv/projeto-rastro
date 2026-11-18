@@ -1,5 +1,6 @@
 
 from datetime import date
+import unicodedata
 
 import pandas as pd
 import streamlit as st
@@ -15,23 +16,54 @@ from modules.exportacao import gerar_excel
 # ==========================================
 
 def normalizar_status(valor):
+    return normalizar_texto(valor)
+
+
+def normalizar_texto(valor):
 
     if pd.isna(valor):
         return ""
 
-    return (
-        str(valor)
-        .strip()
-        .upper()
-        .replace("Í", "I")
-        .replace("Ú", "U")
-    )
+    texto = str(valor).strip().upper()
+
+    texto = unicodedata.normalize(
+        "NFKD",
+        texto
+    ).encode("ASCII", "ignore").decode("ASCII")
+
+    return texto
+
+
+def normalizar_coluna(df, coluna):
+
+    if coluna in df.columns:
+        return df[coluna].apply(normalizar_texto)
+
+    return pd.Series("", index=df.index)
+
+
+def obter_opcoes(df, coluna):
+
+    if coluna not in df.columns:
+        return []
+
+    valores = normalizar_coluna(df, coluna)
+
+    return sorted([
+        valor
+        for valor in valores.unique().tolist()
+        if valor
+    ])
 
 
 def formatar_numero(valor):
 
     return f"{valor:,.0f}".replace(",", ".")
 
+
+# ==========================================
+# MOVIMENTAÇÕES DO VCRA
+# ==========================================
 
 def obter_movimentacoes_vcra():
 
@@ -73,9 +105,11 @@ def obter_movimentacoes_vcra():
         if comparacao.empty:
             continue
 
-        # Não contabilizar registros sem alteração
         comparacao = comparacao[
-            comparacao["Movimentação"] != "Sem alteração"
+            normalizar_coluna(
+                comparacao,
+                "Movimentação"
+            ) != "SEM ALTERACAO"
         ].copy()
 
         if comparacao.empty:
@@ -110,22 +144,47 @@ def filtrar_movimentacoes(
 
     if carteira != "Todas":
 
+        carteira_origem = normalizar_coluna(
+            base,
+            "Carteira de origem"
+        )
+
+        carteira_destino = normalizar_coluna(
+            base,
+            "Carteira de destino"
+        )
+
+        carteira_filtro = normalizar_texto(carteira)
+
         base = base[
-            (base["Carteira de origem"] == carteira)
-            | (base["Carteira de destino"] == carteira)
+            (carteira_origem == carteira_filtro)
+            | (carteira_destino == carteira_filtro)
         ]
 
     if sistema != "Todos":
 
+        sistema_origem = normalizar_coluna(
+            base,
+            "Sistema de origem"
+        )
+
+        sistema_destino = normalizar_coluna(
+            base,
+            "Sistema de destino"
+        )
+
+        sistema_filtro = normalizar_texto(sistema)
+
         base = base[
-            (base["Sistema de origem"] == sistema)
-            | (base["Sistema de destino"] == sistema)
+            (sistema_origem == sistema_filtro)
+            | (sistema_destino == sistema_filtro)
         ]
 
     if tipo_ativo != "Todos":
 
         base = base[
-            base["Tipo do Ativo"] == tipo_ativo
+            normalizar_coluna(base, "Tipo do Ativo")
+            == normalizar_texto(tipo_ativo)
         ]
 
     return base
@@ -163,47 +222,55 @@ def tela_dashboard(df, df_auditorias=None):
         errors="coerce"
     )
 
+    # Padronização das colunas de texto.
+    # A alteração ocorre somente na cópia do dashboard.
+
+    colunas_texto = [
+        "Carteira",
+        "Sistema",
+        "Tipo do Ativo",
+        "Status"
+    ]
+
+    for coluna in colunas_texto:
+
+        if coluna in base_original.columns:
+
+            base_original[coluna] = normalizar_coluna(
+                base_original,
+                coluna
+            )
+
     # ======================================
     # FILTROS GERAIS
     # ======================================
 
     st.subheader("Filtros do Dashboard")
 
-    carteiras = sorted(
-        base_original["Carteira"]
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
+    carteiras = obter_opcoes(
+        base_original,
+        "Carteira"
     )
 
-    sistemas = sorted(
-        base_original["Sistema"]
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
+    sistemas = obter_opcoes(
+        base_original,
+        "Sistema"
     )
 
-    tipos = sorted(
-        base_original["Tipo do Ativo"]
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
+    tipos = obter_opcoes(
+        base_original,
+        "Tipo do Ativo"
     )
 
-    status_lista = sorted(
-        base_original["Status"]
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
+    status_lista = obter_opcoes(
+        base_original,
+        "Status"
     )
 
     f1, f2, f3, f4 = st.columns(4)
 
     with f1:
+
         carteira = st.selectbox(
             "Carteira",
             ["Todas"] + carteiras,
@@ -211,6 +278,7 @@ def tela_dashboard(df, df_auditorias=None):
         )
 
     with f2:
+
         sistema = st.selectbox(
             "Sistema",
             ["Todos"] + sistemas,
@@ -218,6 +286,7 @@ def tela_dashboard(df, df_auditorias=None):
         )
 
     with f3:
+
         tipo_ativo = st.selectbox(
             "Tipo do ativo",
             ["Todos"] + tipos,
@@ -225,6 +294,7 @@ def tela_dashboard(df, df_auditorias=None):
         )
 
     with f4:
+
         status_operacao = st.selectbox(
             "Status da operação",
             ["Todos"] + status_lista,
@@ -238,23 +308,27 @@ def tela_dashboard(df, df_auditorias=None):
     base = base_original.copy()
 
     if carteira != "Todas":
+
         base = base[
-            base["Carteira"].astype(str) == carteira
+            base["Carteira"] == normalizar_texto(carteira)
         ]
 
     if sistema != "Todos":
+
         base = base[
-            base["Sistema"].astype(str) == sistema
+            base["Sistema"] == normalizar_texto(sistema)
         ]
 
     if tipo_ativo != "Todos":
+
         base = base[
-            base["Tipo do Ativo"].astype(str) == tipo_ativo
+            base["Tipo do Ativo"] == normalizar_texto(tipo_ativo)
         ]
 
     if status_operacao != "Todos":
+
         base = base[
-            base["Status"].astype(str) == status_operacao
+            base["Status"] == normalizar_texto(status_operacao)
         ]
 
     st.divider()
@@ -346,6 +420,7 @@ def tela_dashboard(df, df_auditorias=None):
             )
 
         else:
+
             st.info("Não existem operações neste filtro.")
 
     with col2:
@@ -373,6 +448,7 @@ def tela_dashboard(df, df_auditorias=None):
             )
 
         else:
+
             st.info("Não existem operações neste filtro.")
 
     col3, col4 = st.columns(2)
@@ -383,7 +459,7 @@ def tela_dashboard(df, df_auditorias=None):
 
             por_status = (
                 base["Status"]
-                .fillna("Não informado")
+                .replace("", "NÃO INFORMADO")
                 .value_counts()
                 .rename_axis("Status")
                 .reset_index(name="Operações")
@@ -403,6 +479,7 @@ def tela_dashboard(df, df_auditorias=None):
             )
 
         else:
+
             st.info("Não existem operações neste filtro.")
 
     with col4:
@@ -431,6 +508,7 @@ def tela_dashboard(df, df_auditorias=None):
             )
 
         else:
+
             st.info("Não existem operações neste filtro.")
 
     # ======================================
@@ -450,9 +528,16 @@ def tela_dashboard(df, df_auditorias=None):
             .apply(normalizar_status)
         )
 
+        auditorias["CARTEIRA_NORMALIZADA"] = (
+            auditorias["CARTEIRA"]
+            .apply(normalizar_texto)
+        )
+
         if carteira != "Todas":
+
             auditorias = auditorias[
-                auditorias["CARTEIRA"].astype(str) == carteira
+                auditorias["CARTEIRA_NORMALIZADA"]
+                == normalizar_texto(carteira)
             ]
 
         total_auditorias = len(auditorias)
@@ -470,9 +555,9 @@ def tela_dashboard(df, df_auditorias=None):
         )
 
         concluidas = int(
-            auditorias["STATUS_NORMALIZADO"].isin([
-                "CONCLUIDA"
-            ]).sum()
+            (
+                auditorias["STATUS_NORMALIZADO"] == "CONCLUIDA"
+            ).sum()
         )
 
         c1, c2, c3, c4 = st.columns(4)
@@ -499,7 +584,7 @@ def tela_dashboard(df, df_auditorias=None):
 
         status_auditorias = (
             auditorias["STATUS_NORMALIZADO"]
-            .replace("", "NÃO INFORMADO")
+            .replace("", "NAO INFORMADO")
             .value_counts()
             .rename_axis("Status")
             .reset_index(name="Auditorias")
@@ -562,156 +647,142 @@ def tela_dashboard(df, df_auditorias=None):
             tipo_ativo
         )
 
-        # ----------------------------------
-        # SELEÇÃO DO MÊS
-        # ----------------------------------
+        if movimentacoes_filtradas.empty:
 
-        movimentacoes_filtradas["Mes"] = (
-            movimentacoes_filtradas["Data da identificação"]
-            .dt.to_period("M")
-        )
-
-        meses = sorted(
-            movimentacoes_filtradas["Mes"]
-            .dropna()
-            .unique()
-            .tolist()
-        )
-
-        if meses:
-
-            opcoes_meses = {
-                str(mes): mes
-                for mes in meses
-            }
-
-            mes_selecionado = st.selectbox(
-                "Mês de referência das movimentações",
-                options=list(opcoes_meses.keys()),
-                index=len(meses) - 1,
-                format_func=lambda valor: (
-                    opcoes_meses[valor]
-                    .strftime("%m/%Y")
-                ),
-                key="dashboard_mes_movimentacao"
+            st.info(
+                "Não existem movimentações para os filtros selecionados."
             )
 
-            mes_escolhido = opcoes_meses[mes_selecionado]
-
-            movimentos_mes = movimentacoes_filtradas[
-                movimentacoes_filtradas["Mes"] == mes_escolhido
-            ].copy()
-
-            total_mes = len(movimentos_mes)
-
-            transferencias = movimentos_mes[
-                movimentos_mes["Movimentação"].str.contains(
-                    "transferência",
-                    case=False,
-                    na=False
-                )
-            ]
-
-            reducoes = movimentos_mes[
-                movimentos_mes["Movimentação"].isin([
-                    "Redução de quantidade",
-                    "Possível saída/baixa"
-                ])
-            ]
-
-            aumentos = movimentos_mes[
-                movimentos_mes["Movimentação"].isin([
-                    "Aumento de quantidade",
-                    "Nova entrada sem origem identificada"
-                ])
-            ]
-
-            conferencias = movimentos_mes[
-                movimentos_mes["Movimentação"] == "Necessita conferência"
-            ]
-
-            st.markdown(
-                f"**Resumo de {mes_escolhido.strftime('%m/%Y')}**"
-            )
-
-            c1, c2, c3, c4, c5 = st.columns(5)
-
-            c1.metric(
-                "Movimentações",
-                total_mes
-            )
-
-            c2.metric(
-                "Transferências",
-                len(transferencias)
-            )
-
-            c3.metric(
-                "Reduções / saídas",
-                len(reducoes)
-            )
-
-            c4.metric(
-                "Aumentos / entradas",
-                len(aumentos)
-            )
-
-            c5.metric(
-                "Necessita conferência",
-                len(conferencias)
-            )
+        else:
 
             # ----------------------------------
-            # GRÁFICOS DE MOVIMENTAÇÕES
+            # SELEÇÃO DO MÊS
             # ----------------------------------
 
-            col1, col2 = st.columns(2)
+            movimentacoes_filtradas["Mes"] = (
+                movimentacoes_filtradas["Data da identificação"]
+                .dt.to_period("M")
+            )
 
-            with col1:
+            meses = sorted(
+                movimentacoes_filtradas["Mes"]
+                .dropna()
+                .unique()
+                .tolist()
+            )
 
-                por_movimentacao = (
-                    movimentacoes_filtradas
+            if meses:
 
-                    .groupby("Mes")
-                    .size()
-                    .reset_index(name="Movimentações")
+                opcoes_meses = {
+                    str(mes): mes
+                    for mes in meses
+                }
+
+                mes_selecionado = st.selectbox(
+                    "Mês de referência das movimentações",
+                    options=list(opcoes_meses.keys()),
+                    index=len(meses) - 1,
+                    format_func=lambda valor: (
+                        opcoes_meses[valor].strftime("%m/%Y")
+                    ),
+                    key="dashboard_mes_movimentacao"
                 )
 
-                por_movimentacao["Mês"] = (
-                    por_movimentacao["Mes"]
-                    .astype(str)
+                mes_escolhido = opcoes_meses[mes_selecionado]
+
+                movimentos_mes = movimentacoes_filtradas[
+                    movimentacoes_filtradas["Mes"] == mes_escolhido
+                ].copy()
+
+                total_mes = len(movimentos_mes)
+
+                categorias_movimentacao = normalizar_coluna(
+                    movimentos_mes,
+                    "Movimentação"
                 )
 
-                fig = px.line(
-                    por_movimentacao,
-                    x="Mês",
-                    y="Movimentações",
-                    markers=True,
-                    title="Evolução mensal das movimentações"
+                transferencias = movimentos_mes[
+                    categorias_movimentacao.str.contains(
+                        "TRANSFERENCIA",
+                        na=False
+                    )
+                ]
+
+                reducoes = movimentos_mes[
+                    categorias_movimentacao.isin([
+                        "REDUCAO DE QUANTIDADE",
+                        "POSSIVEL SAIDA/BAIXA"
+                    ])
+                ]
+
+                aumentos = movimentos_mes[
+                    categorias_movimentacao.isin([
+                        "AUMENTO DE QUANTIDADE",
+                        "NOVA ENTRADA SEM ORIGEM IDENTIFICADA"
+                    ])
+                ]
+
+                conferencias = movimentos_mes[
+                    categorias_movimentacao == "NECESSITA CONFERENCIA"
+                ]
+
+                st.markdown(
+                    f"**Resumo de {mes_escolhido.strftime('%m/%Y')}**"
                 )
 
-                st.plotly_chart(
-                    fig,
-                    use_container_width=True
+                c1, c2, c3, c4, c5 = st.columns(5)
+
+                c1.metric(
+                    "Movimentações",
+                    total_mes
                 )
 
-            with col2:
+                c2.metric(
+                    "Transferências",
+                    len(transferencias)
+                )
 
-                if not movimentos_mes.empty:
+                c3.metric(
+                    "Reduções / saídas",
+                    len(reducoes)
+                )
 
-                    por_categoria = (
-                        movimentos_mes["Movimentação"]
-                        .value_counts()
-                        .rename_axis("Movimentação")
-                        .reset_index(name="Quantidade")
+                c4.metric(
+                    "Aumentos / entradas",
+                    len(aumentos)
+                )
+
+                c5.metric(
+                    "Necessita conferência",
+                    len(conferencias)
+                )
+
+                # ----------------------------------
+                # GRÁFICOS DE MOVIMENTAÇÕES
+                # ----------------------------------
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+
+                    por_movimentacao = (
+                        movimentacoes_filtradas
+                        .groupby("Mes")
+                        .size()
+                        .reset_index(name="Movimentações")
                     )
 
-                    fig = px.bar(
-                        por_categoria,
-                        x="Movimentação",
-                        y="Quantidade",
-                        title="Movimentações por classificação",
-                        text="Quantidade"
+                    por_movimentacao["Mês"] = (
+                        por_movimentacao["Mes"]
+                        .astype(str)
+                    )
+
+                    fig = px.line(
+                        por_movimentacao,
+                        x="Mês",
+                        y="Movimentações",
+                        markers=True,
+                        title="Evolução mensal das movimentações"
                     )
 
                     st.plotly_chart(
@@ -719,39 +790,64 @@ def tela_dashboard(df, df_auditorias=None):
                         use_container_width=True
                     )
 
-                else:
-                    st.info(
-                        "Nenhuma movimentação encontrada neste mês."
+                with col2:
+
+                    if not movimentos_mes.empty:
+
+                        por_categoria = (
+                            movimentos_mes["Movimentação"]
+                            .value_counts()
+                            .rename_axis("Movimentação")
+                            .reset_index(name="Quantidade")
+                        )
+
+                        fig = px.bar(
+                            por_categoria,
+                            x="Movimentação",
+                            y="Quantidade",
+                            title="Movimentações por classificação",
+                            text="Quantidade"
+                        )
+
+                        st.plotly_chart(
+                            fig,
+                            use_container_width=True
+                        )
+
+                    else:
+
+                        st.info(
+                            "Nenhuma movimentação encontrada neste mês."
+                        )
+
+                # ----------------------------------
+                # TABELA DE MOVIMENTAÇÕES
+                # ----------------------------------
+
+                with st.expander(
+                    "Consultar registros de movimentação"
+                ):
+
+                    st.dataframe(
+                        movimentos_mes.drop(
+                            columns=["Mes"],
+                            errors="ignore"
+                        ),
+                        use_container_width=True,
+                        hide_index=True
                     )
 
-            # ----------------------------------
-            # TABELA DE MOVIMENTAÇÕES
-            # ----------------------------------
+            else:
 
-            with st.expander(
-                "Consultar registros de movimentação"
-            ):
-
-                st.dataframe(
-                    movimentos_mes.drop(
-                        columns=["Mes"],
-                        errors="ignore"
-                    ),
-                    use_container_width=True,
-                    hide_index=True
+                st.info(
+                    "Não existem movimentações para os filtros selecionados."
                 )
 
-        else:
-
-            st.info(
-                "Não existem movimentações para os filtros selecionados."
+            st.caption(
+                "A contagem considera os registros gerados pela comparação "
+                "entre posições consecutivas do VCRA. Uma transferência "
+                "dividida em vários destinos pode gerar mais de um registro."
             )
-
-        st.caption(
-            "A contagem considera os registros gerados pela comparação "
-            "entre posições consecutivas do VCRA. Uma transferência "
-            "dividida em vários destinos pode gerar mais de um registro."
-        )
 
 
 # ==========================================
@@ -786,16 +882,18 @@ def tela_pendencias(df):
         ]
     )
 
+    carteiras = obter_opcoes(base, "Carteira")
+
     carteira = st.selectbox(
         "Carteira",
-        ["Todas"] + sorted(
-            base["Carteira"].dropna().unique().tolist()
-        )
+        ["Todas"] + carteiras
     )
+
+    sistemas = obter_opcoes(base, "Sistema")
 
     sistema = st.selectbox(
         "Sistema",
-        ["Todos", "LZ", "XZ"]
+        ["Todos"] + sistemas
     )
 
     if prazo == "Vencidas":
@@ -815,13 +913,15 @@ def tela_pendencias(df):
     if carteira != "Todas":
 
         base = base[
-            base["Carteira"] == carteira
+            normalizar_coluna(base, "Carteira")
+            == normalizar_texto(carteira)
         ]
 
     if sistema != "Todos":
 
         base = base[
-            base["Sistema"] == sistema
+            normalizar_coluna(base, "Sistema")
+            == normalizar_texto(sistema)
         ]
 
     base = base.sort_values(
@@ -833,18 +933,20 @@ def tela_pendencias(df):
         len(base)
     )
 
+    colunas_exibicao = [
+        "Operação",
+        "Carteira",
+        "Quantidade",
+        "Sistema",
+        "Tipo do Ativo",
+        "Data de Vencimento",
+        "Dias até o vencimento",
+        "Status"
+    ]
+
     st.dataframe(
         base[
-            [
-                "Operação",
-                "Carteira",
-                "Quantidade",
-                "Sistema",
-                "Tipo do Ativo",
-                "Data de Vencimento",
-                "Dias até o vencimento",
-                "Status"
-            ]
+            colunas_exibicao
         ],
         use_container_width=True,
         hide_index=True
@@ -866,16 +968,23 @@ def tela_base_dados(df):
 
     st.title("Base de Dados")
 
+    sistemas = obter_opcoes(df, "Sistema")
+
     sistema = st.selectbox(
         "Visualizar base",
-        ["Ambas", "LZ", "XZ"]
+        ["Ambas"] + sistemas
     )
 
-    base = (
-        df
-        if sistema == "Ambas"
-        else df[df["Sistema"] == sistema]
-    )
+    if sistema == "Ambas":
+
+        base = df.copy()
+
+    else:
+
+        base = df[
+            normalizar_coluna(df, "Sistema")
+            == normalizar_texto(sistema)
+        ].copy()
 
     a, b, c = st.columns(3)
 

@@ -1,4 +1,7 @@
 
+import re
+import unicodedata
+
 import pandas as pd
 import streamlit as st
 
@@ -45,7 +48,7 @@ COLUNAS_RESULTADO = [
 
 
 # ==========================================
-# NORMALIZAR CHAVES
+# NORMALIZAÇÃO
 # ==========================================
 
 def normalizar_chave(valor):
@@ -53,10 +56,37 @@ def normalizar_chave(valor):
     if pd.isna(valor):
         return ""
 
-    if isinstance(valor, pd.Timestamp):
+    if isinstance(valor, (pd.Timestamp,)):
         return valor.strftime("%Y-%m-%d")
 
-    return str(valor).strip()
+    texto = str(valor).strip().upper()
+
+    texto = unicodedata.normalize(
+        "NFKD",
+        texto
+    )
+
+    texto = "".join(
+        caractere
+        for caractere in texto
+        if not unicodedata.combining(caractere)
+    )
+
+    return texto
+
+
+def normalizar_emitente(valor):
+
+    """
+    Normaliza o CNPJ do emitente.
+
+    Remove pontos, barras, traços e espaços para evitar
+    diferenças de formatação na identificação do ativo.
+    """
+
+    texto = normalizar_chave(valor)
+
+    return re.sub(r"[^A-Z0-9]", "", texto)
 
 
 def dados_local(local):
@@ -86,24 +116,41 @@ def organizar_posicoes(df):
     if df.empty:
         return resultado
 
-    colunas_agrupamento = (
+    colunas_necessarias = (
         CHAVES_IDENTIDADE
         + CHAVES_LOCALIZACAO
+        + ["Quantidade"]
     )
 
-    dados = df[
-        colunas_agrupamento + ["Quantidade"]
-    ].copy()
+    dados = df[colunas_necessarias].copy()
+
+    # Normalizar campos utilizados na comparação
+
+    for coluna in CHAVES_IDENTIDADE + CHAVES_LOCALIZACAO:
+
+        if coluna == "Emitente":
+
+            dados[coluna] = dados[coluna].apply(
+                normalizar_emitente
+            )
+
+        else:
+
+            dados[coluna] = dados[coluna].apply(
+                normalizar_chave
+            )
 
     dados["Quantidade"] = pd.to_numeric(
         dados["Quantidade"],
         errors="coerce"
     ).fillna(0)
 
+    # Agrupar registros com a mesma identidade e localização
+
     agrupado = (
         dados
         .groupby(
-            colunas_agrupamento,
+            CHAVES_IDENTIDADE + CHAVES_LOCALIZACAO,
             dropna=False,
             sort=False
         )["Quantidade"]
@@ -114,12 +161,12 @@ def organizar_posicoes(df):
     for linha in agrupado.to_dict("records"):
 
         identidade = tuple(
-            normalizar_chave(linha[coluna])
+            linha[coluna]
             for coluna in CHAVES_IDENTIDADE
         )
 
         local = tuple(
-            normalizar_chave(linha[coluna])
+            linha[coluna]
             for coluna in CHAVES_LOCALIZACAO
         )
 
@@ -271,15 +318,63 @@ def identificar_movimentacoes(posicao_anterior, posicao_atual):
                     "atual": quantidade_atual
                 })
 
-        # Verificar se existem várias origens possíveis
+        # ======================================
+        # VÁRIAS ORIGENS E DESTINOS
+        # ======================================
 
         grupo_necessita_conferencia = (
             len(origens) > 1 and len(destinos) > 0
         )
 
+        if grupo_necessita_conferencia:
+
+            # Não associa automaticamente uma origem a um destino.
+            # Cada redução e cada aumento ficam separados para conferência.
+
+            for origem in origens:
+
+                movimentacoes.append(
+                    criar_linha(
+                        movimentacao="Necessita conferência",
+                        quantidade=origem["restante"],
+                        tipo_ativo=tipo_ativo,
+                        emitente=emitente,
+                        data_aquisicao=data_aquisicao,
+                        data_vencimento=data_vencimento,
+                        origem=origem["local"],
+                        quantidade_restante_origem=origem["atual"],
+                        observacao=(
+                            "Existem várias origens e destinos possíveis "
+                            "para este ativo. A associação entre as "
+                            "localizações não foi determinada."
+                        )
+                    )
+                )
+
+            for destino in destinos:
+
+                movimentacoes.append(
+                    criar_linha(
+                        movimentacao="Necessita conferência",
+                        quantidade=destino["restante"],
+                        tipo_ativo=tipo_ativo,
+                        emitente=emitente,
+                        data_aquisicao=data_aquisicao,
+                        data_vencimento=data_vencimento,
+                        destino=destino["local"],
+                        observacao=(
+                            "Existe aumento de quantidade, mas há várias "
+                            "origens possíveis. A origem correspondente "
+                            "precisa ser conferida."
+                        )
+                    )
+                )
+
+            continue
+
         # ======================================
-        # DISTRIBUIR QUANTIDADES ENTRE ORIGENS
-        # E DESTINOS
+        # DISTRIBUIR QUANTIDADES
+        # QUANDO HÁ UMA ÚNICA ORIGEM
         # ======================================
 
         indice_destino = 0
@@ -289,16 +384,12 @@ def identificar_movimentacoes(posicao_anterior, posicao_atual):
             quantidade_transferida = 0
             correspondencias = []
 
-            # Continua a partir do último destino utilizado
-
             while (
                 origem["restante"] > TOLERANCIA
                 and indice_destino < len(destinos)
             ):
 
                 destino = destinos[indice_destino]
-
-                # Pula destinos já esgotados
 
                 if destino["restante"] <= TOLERANCIA:
                     indice_destino += 1
@@ -319,8 +410,6 @@ def identificar_movimentacoes(posicao_anterior, posicao_atual):
                     "quantidade": quantidade
                 })
 
-                # Avança quando o destino estiver esgotado
-
                 if destino["restante"] <= TOLERANCIA:
                     indice_destino += 1
 
@@ -337,11 +426,7 @@ def identificar_movimentacoes(posicao_anterior, posicao_atual):
                     )
                 )
 
-                if grupo_necessita_conferencia:
-
-                    classificacao = "Necessita conferência"
-
-                elif transferencia_total:
+                if transferencia_total:
 
                     classificacao = "Possível transferência total"
 
@@ -349,28 +434,16 @@ def identificar_movimentacoes(posicao_anterior, posicao_atual):
 
                     classificacao = "Possível transferência parcial"
 
-                # Criar uma linha para cada destino
-
                 for correspondencia in correspondencias:
 
                     quantidade_destino = correspondencia["quantidade"]
 
-                    if grupo_necessita_conferencia:
-
-                        observacao_destino = (
-                            "Foram identificadas várias origens possíveis "
-                            "para os destinos encontrados. "
-                            "A associação exata precisa de conferência."
-                        )
-
-                    else:
-
-                        observacao_destino = (
-                            f"Esta linha representa {quantidade_destino:g} "
-                            f"unidades de uma transferência total de "
-                            f"{quantidade_transferida:g} unidades. "
-                            "Necessita validação."
-                        )
+                    observacao_destino = (
+                        f"Esta linha representa {quantidade_destino:g} "
+                        f"unidades de uma possível transferência de "
+                        f"{quantidade_transferida:g} unidades. "
+                        "A associação precisa de validação."
+                    )
 
                     movimentacoes.append(
                         criar_linha(
@@ -393,34 +466,18 @@ def identificar_movimentacoes(posicao_anterior, posicao_atual):
 
             if origem["restante"] > TOLERANCIA:
 
-                if grupo_necessita_conferencia:
-
-                    classificacao = "Necessita conferência"
-
-                    observacao = (
-                        "Existe redução de quantidade, mas há várias "
-                        "origens e destinos possíveis para este ativo. "
-                        "Não é possível confirmar se o restante "
-                        "representa transferência ou saída."
-                    )
-
-                elif origem["atual"] <= TOLERANCIA:
+                if origem["atual"] <= TOLERANCIA:
 
                     classificacao = "Possível saída/baixa"
-
-                    observacao = (
-                        "Não foi encontrada quantidade correspondente "
-                        "em outra localização."
-                    )
 
                 else:
 
                     classificacao = "Redução de quantidade"
 
-                    observacao = (
-                        "Não foi encontrada quantidade correspondente "
-                        "em outra localização."
-                    )
+                observacao = (
+                    "Não foi encontrada quantidade correspondente "
+                    "em outra localização."
+                )
 
                 movimentacoes.append(
                     criar_linha(
@@ -445,17 +502,7 @@ def identificar_movimentacoes(posicao_anterior, posicao_atual):
             if destino["restante"] <= TOLERANCIA:
                 continue
 
-            if grupo_necessita_conferencia:
-
-                classificacao = "Necessita conferência"
-
-                observacao = (
-                    "Existe aumento de quantidade, mas há várias "
-                    "origens possíveis para este destino. "
-                    "A associação precisa de conferência."
-                )
-
-            elif destino["anterior"] <= TOLERANCIA:
+            if destino["anterior"] <= TOLERANCIA:
 
                 classificacao = "Nova entrada sem origem identificada"
 
@@ -624,8 +671,6 @@ def aplicar_filtros(resultado):
 
     filtrado = resultado.copy()
 
-    # Situação da movimentação
-
     if situacao == "Somente com movimentação":
 
         filtrado = filtrado[
@@ -638,81 +683,24 @@ def aplicar_filtros(resultado):
             filtrado["Movimentação"] == "Sem alteração"
         ]
 
-    # Tipo de movimentação
+    filtros = [
+        ("Movimentação", filtro_movimentacao),
+        ("Tipo do Ativo", filtro_tipo),
+        ("Emitente", filtro_emitente),
+        ("Carteira de origem", filtro_carteira_origem),
+        ("Operação de origem", filtro_operacao_origem),
+        ("Sistema de origem", filtro_sistema_origem),
+        ("Carteira de destino", filtro_carteira_destino),
+        ("Operação de destino", filtro_operacao_destino),
+        ("Sistema de destino", filtro_sistema_destino)
+    ]
 
-    if filtro_movimentacao:
+    for coluna, valores in filtros:
 
-        filtrado = filtrado[
-            filtrado["Movimentação"].isin(filtro_movimentacao)
-        ]
-
-    # Tipo de ativo
-
-    if filtro_tipo:
-
-        filtrado = filtrado[
-            filtrado["Tipo do Ativo"].isin(filtro_tipo)
-        ]
-
-    # Emitente
-
-    if filtro_emitente:
-
-        filtrado = filtrado[
-            filtrado["Emitente"].isin(filtro_emitente)
-        ]
-
-    # Filtros de origem
-
-    if filtro_carteira_origem:
-
-        filtrado = filtrado[
-            filtrado["Carteira de origem"].isin(
-                filtro_carteira_origem
-            )
-        ]
-
-    if filtro_operacao_origem:
-
-        filtrado = filtrado[
-            filtrado["Operação de origem"].isin(
-                filtro_operacao_origem
-            )
-        ]
-
-    if filtro_sistema_origem:
-
-        filtrado = filtrado[
-            filtrado["Sistema de origem"].isin(
-                filtro_sistema_origem
-            )
-        ]
-
-    # Filtros de destino
-
-    if filtro_carteira_destino:
-
-        filtrado = filtrado[
-            filtrado["Carteira de destino"].isin(
-                filtro_carteira_destino
-            )
-        ]
-
-    if filtro_operacao_destino:
-
-        filtrado = filtrado[
-            filtrado["Operação de destino"].isin(
-                filtro_operacao_destino
-            )
-        ]
-
-    if filtro_sistema_destino:
-
-        filtrado = filtrado[
-            filtrado["Sistema de destino"].isin(
-                filtro_sistema_destino
-            )
-        ]
+        if valores:
+            filtrado = filtrado[
+                filtrado[coluna].isin(valores)
+            ]
 
     return filtrado
 
@@ -773,8 +761,6 @@ def exibir_consulta_posicao(df, identificador):
                         )
                     ]
 
-    # Total de registros encontrados
-
     total_registros = len(consulta)
 
     st.divider()
@@ -790,8 +776,6 @@ def exibir_consulta_posicao(df, identificador):
             "Nenhum registro encontrado com esses filtros."
         )
         return
-
-    # Calcular paginação
 
     total_paginas = (
         total_registros + REGISTROS_POR_PAGINA - 1
@@ -984,8 +968,6 @@ def tela_rastreamento():
             "Necessita conferência",
             len(necessita_conferencia)
         )
-
-        # Aplicar filtros
 
         resultado_filtrado = aplicar_filtros(resultado)
 
