@@ -213,15 +213,10 @@ def converter_pendentes(base, sistema_padrao):
 
 
 # ==========================================
-# LEITURA DE EXCEL
+# IDENTIFICAR ENGINE DO EXCEL
 # ==========================================
 
 def _identificar_engine(caminho):
-
-    """
-    Identifica o mecanismo de leitura conforme
-    a extensão do arquivo Excel.
-    """
 
     extensao = Path(caminho).suffix.lower()
 
@@ -235,6 +230,10 @@ def _identificar_engine(caminho):
         f"Formato de Excel não suportado: {extensao}"
     )
 
+
+# ==========================================
+# LEITURA DE EXCEL
+# ==========================================
 
 @st.cache_data
 def _ler_excel(
@@ -569,7 +568,7 @@ garantir_base_operacoes_auditoria()
 
 
 # ==========================================
-# CARREGAR BASE VCRA
+# LEITURA DO VCRA
 # ==========================================
 
 @st.cache_data
@@ -585,9 +584,14 @@ def _ler_excel_vcra(
     return pd.read_excel(
         caminho,
         sheet_name=aba,
-        engine=engine
+        engine=engine,
+        header=8
     )
 
+
+# ==========================================
+# CONVERTER CABEÇALHOS DO VCRA
+# ==========================================
 
 def converter_vcra(base):
 
@@ -624,6 +628,10 @@ def converter_vcra(base):
     return base.rename(columns=mapeamento)
 
 
+# ==========================================
+# CARREGAR BASE VCRA
+# ==========================================
+
 def carregar_vcra():
 
     caminho = DATA_DIR / "Base_VCRA.xlsb"
@@ -651,6 +659,7 @@ def carregar_vcra():
 
         base = converter_vcra(base)
 
+        # Verifica os campos obrigatórios antes de selecionar.
         faltantes = [
             coluna
             for coluna in COLUNAS_VCRA
@@ -667,6 +676,7 @@ def carregar_vcra():
 
         base = base[COLUNAS_VCRA].copy()
 
+        # Converter datas.
         for coluna in [
             "Data de Posição",
             "Data de Aquisição",
@@ -679,11 +689,13 @@ def carregar_vcra():
                 dayfirst=True
             )
 
+        # Converter quantidade.
         base["Quantidade"] = pd.to_numeric(
             base["Quantidade"],
             errors="coerce"
         )
 
+        # Normalizar campos de texto.
         for coluna in [
             "Carteira",
             "Operação",
@@ -699,6 +711,7 @@ def carregar_vcra():
                 .str.strip()
             )
 
+        # Manter somente registros com data de posição.
         base = base.dropna(
             subset=["Data de Posição"]
         )
