@@ -14,7 +14,7 @@ DATA_DIR = ROOT / "data"
 
 
 # ==========================================
-# COLUNAS DAS BASES
+# COLUNAS INTERNAS DO RASTRO
 # ==========================================
 
 COLUNAS = [
@@ -31,6 +31,7 @@ COLUNAS = [
     "Emitente",
     "Sistema"
 ]
+
 
 COLUNAS_PENDENTES = [
     "CARTEIRA",
@@ -59,6 +60,7 @@ COLUNAS_AUDITORIAS = [
     "OBSERVAÇÕES"
 ]
 
+
 COLUNAS_OPERACOES_AUDITORIA = [
     "ID_AUDITORIA",
     "CARTEIRA",
@@ -70,11 +72,169 @@ COLUNAS_OPERACOES_AUDITORIA = [
 
 
 # ==========================================
+# COLUNAS INTERNAS DO VCRA
+# ==========================================
+
+COLUNAS_VCRA = [
+    "Data de Posição",
+    "Carteira",
+    "Operação",
+    "Data de Aquisição",
+    "Data de Vencimento",
+    "Quantidade",
+    "Tipo do Ativo",
+    "Emitente",
+    "Sistema"
+]
+
+
+# ==========================================
+# CONVERSÃO DOS NOVOS CABEÇALHOS
+# ==========================================
+
+def normalizar_cabecalho(coluna):
+
+    return (
+        str(coluna)
+        .strip()
+        .upper()
+        .replace("\n", " ")
+    )
+
+
+def converter_base_rastro(base, sistema_padrao):
+
+    """
+    Converte os cabeçalhos das abas BASE das planilhas
+    LZ e XZ para os nomes internos utilizados pelo RASTRO.
+    """
+
+    base = base.copy()
+
+    base.columns = [
+        normalizar_cabecalho(coluna)
+        for coluna in base.columns
+    ]
+
+    mapeamento = {
+        "SISTEMA": "Sistema",
+        "CD OPERAÇÃO": "Operação",
+        "CARTEIRA": "Carteira",
+        "TIPO": "Tipo do Ativo",
+        "DT VENCIMENTO": "Data de Vencimento",
+        "LASTRO": "Lastro",
+        "QDE": "Quantidade",
+        "NEG/VENC": "Indicador",
+        "CNPJ": "Emitente"
+    }
+
+    base = base.rename(
+        columns=mapeamento
+    )
+
+    # Campos que não existem na nova estrutura.
+    campos_opcionais = [
+        "Data de Aquisição",
+        "Status",
+        "PU Atual"
+    ]
+
+    for coluna in campos_opcionais:
+
+        if coluna not in base.columns:
+            base[coluna] = None
+
+    if "Sistema" not in base.columns:
+        base["Sistema"] = sistema_padrao
+
+    else:
+
+        base["Sistema"] = (
+            base["Sistema"]
+            .fillna(sistema_padrao)
+            .astype(str)
+            .str.strip()
+        )
+
+        base.loc[
+            base["Sistema"] == "",
+            "Sistema"
+        ] = sistema_padrao
+
+    for coluna in COLUNAS:
+
+        if coluna not in base.columns:
+            base[coluna] = None
+
+    return base[COLUNAS].copy()
+
+
+def converter_pendentes(base, sistema_padrao):
+
+    """
+    Converte os cabeçalhos da aba PENDENTES
+    para a estrutura interna do RASTRO.
+    """
+
+    base = base.copy()
+
+    base.columns = [
+        normalizar_cabecalho(coluna)
+        for coluna in base.columns
+    ]
+
+    mapeamento = {
+        "SISTEMA": "Sistema",
+        "CD OPERAÇÃO": "OPERAÇÃO",
+        "CARTEIRA": "CARTEIRA",
+        "QDE": "QUANTIDADE",
+        "DT VENCIMENTO": "DATA_VENCIMENTO"
+    }
+
+    base = base.rename(
+        columns=mapeamento
+    )
+
+    campos_necessarios = [
+        "CARTEIRA",
+        "OPERAÇÃO",
+        "QUANTIDADE",
+        "DATA_AQUISIÇÃO",
+        "DATA_VENCIMENTO",
+        "Sistema"
+    ]
+
+    for coluna in campos_necessarios:
+
+        if coluna not in base.columns:
+            base[coluna] = None
+
+    base["Sistema"] = (
+        base["Sistema"]
+        .fillna(sistema_padrao)
+        .astype(str)
+        .str.strip()
+    )
+
+    base.loc[
+        base["Sistema"] == "",
+        "Sistema"
+    ] = sistema_padrao
+
+    return base[campos_necessarios].copy()
+
+
+# ==========================================
 # LEITURA DE EXCEL
 # ==========================================
 
 @st.cache_data
-def _ler_excel(caminho: str, modificacao: float, aba: str) -> pd.DataFrame:
+def _ler_excel(
+    caminho: str,
+    modificacao: float,
+    aba: str
+) -> pd.DataFrame:
+
     return pd.read_excel(
         caminho,
         sheet_name=aba,
@@ -92,57 +252,55 @@ def carregar_bases():
     avisos = []
 
     arquivos = [
-        ("Base_RASTRO_LZ.xlsx", "LZ", "Sistema LZ"),
-        ("Base_RASTRO_XZ.xlsx", "XZ", "Sistema XZ")
+        ("Base_RASTRO_LZ.xlsx", "LZ"),
+        ("Base_RASTRO_XZ.xlsx", "XZ")
     ]
 
-    for nome, sistema, aba in arquivos:
+    for nome, sistema in arquivos:
 
         caminho = DATA_DIR / nome
 
         if not caminho.exists():
-            avisos.append(f"Arquivo não encontrado: {nome}.")
+
+            avisos.append(
+                f"Arquivo não encontrado: {nome}."
+            )
+
             continue
 
         try:
 
+            # As duas planilhas utilizam a aba BASE.
             base = _ler_excel(
                 str(caminho),
                 caminho.stat().st_mtime,
-                aba
+                "BASE"
             ).copy()
 
-            faltantes = [
-                coluna
-                for coluna in COLUNAS
-                if coluna not in base.columns
-            ]
+            base = converter_base_rastro(
+                base,
+                sistema
+            )
 
-            if faltantes:
-                avisos.append(
-                    f"{nome}: colunas ausentes: {', '.join(faltantes)}."
-                )
-                continue
-
-            base = base[COLUNAS].copy()
-
-            base["Sistema"] = sistema
-
+            # Conversão das datas.
             for coluna in [
                 "Data de Aquisição",
                 "Data de Vencimento"
             ]:
+
                 base[coluna] = pd.to_datetime(
                     base[coluna],
                     errors="coerce",
                     dayfirst=True
                 )
 
+            # Conversão das quantidades.
             base["Quantidade"] = pd.to_numeric(
                 base["Quantidade"],
                 errors="coerce"
             )
 
+            # Conversão do PU.
             base["PU Atual"] = pd.to_numeric(
                 base["PU Atual"],
                 errors="coerce"
@@ -153,11 +311,14 @@ def carregar_bases():
         except Exception as erro:
 
             avisos.append(
-                f"Não foi possível ler a aba {aba} de {nome}: {erro}"
+                f"Não foi possível ler a aba BASE de {nome}: {erro}"
             )
 
     if not partes:
-        return pd.DataFrame(columns=COLUNAS), avisos
+
+        return pd.DataFrame(
+            columns=COLUNAS
+        ), avisos
 
     return pd.concat(
         partes,
@@ -184,45 +345,36 @@ def carregar_pendentes():
         caminho = DATA_DIR / nome
 
         if not caminho.exists():
-            avisos.append(f"Arquivo não encontrado: {nome}.")
+
+            avisos.append(
+                f"Arquivo não encontrado: {nome}."
+            )
+
             continue
 
         try:
 
+            # Nova aba utilizada pelas planilhas.
             base = _ler_excel(
                 str(caminho),
                 caminho.stat().st_mtime,
-                "Pendentes"
+                "PENDENTES"
             ).copy()
 
-            colunas_origem = [
+            base = converter_pendentes(
+                base,
+                sistema
+            )
+
+            base = base.dropna(
+                how="all"
+            )
+
+            for coluna in [
                 "CARTEIRA",
-                "OPERAÇÃO",
-                "QUANTIDADE",
-                "DATA_AQUISIÇÃO",
-                "DATA_VENCIMENTO"
-            ]
+                "OPERAÇÃO"
+            ]:
 
-            faltantes = [
-                coluna
-                for coluna in colunas_origem
-                if coluna not in base.columns
-            ]
-
-            if faltantes:
-                avisos.append(
-                    f"{nome} - aba Pendentes: "
-                    f"colunas ausentes: {', '.join(faltantes)}."
-                )
-                continue
-
-            base = base[colunas_origem].copy()
-
-            base = base.dropna(how="all")
-
-            base["Sistema"] = sistema
-
-            for coluna in ["CARTEIRA", "OPERAÇÃO"]:
                 base[coluna] = (
                     base[coluna]
                     .fillna("")
@@ -239,6 +391,7 @@ def carregar_pendentes():
                 "DATA_AQUISIÇÃO",
                 "DATA_VENCIMENTO"
             ]:
+
                 base[coluna] = pd.to_datetime(
                     base[coluna],
                     errors="coerce",
@@ -255,11 +408,14 @@ def carregar_pendentes():
         except Exception as erro:
 
             avisos.append(
-                f"Não foi possível ler a aba Pendentes de {nome}: {erro}"
+                f"Não foi possível ler a aba PENDENTES de {nome}: {erro}"
             )
 
     if not partes:
-        return pd.DataFrame(columns=COLUNAS_PENDENTES), avisos
+
+        return pd.DataFrame(
+            columns=COLUNAS_PENDENTES
+        ), avisos
 
     return pd.concat(
         partes,
@@ -392,7 +548,9 @@ def carregar_operacoes_auditoria():
             if coluna not in base.columns:
                 base[coluna] = None
 
-        base = base[COLUNAS_OPERACOES_AUDITORIA].copy()
+        base = base[
+            COLUNAS_OPERACOES_AUDITORIA
+        ].copy()
 
         return base, avisos
 
@@ -418,19 +576,6 @@ garantir_base_operacoes_auditoria()
 # CARREGAR BASE VCRA
 # ==========================================
 
-COLUNAS_VCRA = [
-    "Data de Posição",
-    "Carteira",
-    "Operação",
-    "Data de Aquisição",
-    "Data de Vencimento",
-    "Quantidade",
-    "Tipo do Ativo",
-    "Emitente",
-    "Sistema"
-]
-
-
 @st.cache_data
 def _ler_excel_vcra(
     caminho: str,
@@ -442,9 +587,49 @@ def _ler_excel_vcra(
     return pd.read_excel(
         caminho,
         sheet_name=aba,
-        usecols=lambda coluna: coluna in COLUNAS_VCRA,
         engine="openpyxl"
     )
+
+
+def converter_vcra(base):
+
+    """
+    Converte os cabeçalhos originais da planilha VCRA
+    para os nomes internos utilizados pelo RASTRO.
+    """
+
+    base = base.copy()
+
+    base.columns = [
+        normalizar_cabecalho(coluna)
+        for coluna in base.columns
+    ]
+
+    mapeamento = {
+        "DATA_POSICAO": "Data de Posição",
+        "SIGLA_CARTEIRA": "Carteira",
+        "CODIGO_OPERACAO": "Operação",
+        "CODIGO_LASTRO": "Lastro",
+        "TIPO_ATIVO": "Tipo do Ativo",
+        "CODIGO_EMITENTE": "Emitente",
+        "DATA_AQUISICAO": "Data de Aquisição",
+        "DATA_VENCIMENTO": "Data de Vencimento",
+        "QUANTIDADE_TOTAL": "Quantidade",
+        "VALOR_PU": "PU Atual",
+        "CODIGO_SISTEMA": "Sistema",
+        "INDICADOR_NEGOCIACAO_VENCIMENTO": "Indicador"
+    }
+
+    base = base.rename(
+        columns=mapeamento
+    )
+
+    for coluna in COLUNAS_VCRA:
+
+        if coluna not in base.columns:
+            base[coluna] = None
+
+    return base
 
 
 def carregar_vcra():
@@ -465,13 +650,17 @@ def carregar_vcra():
         modificacao = caminho.stat().st_mtime
         tamanho = caminho.stat().st_size
 
+        # A aba da planilha agora se chama VCRA.
         base = _ler_excel_vcra(
             str(caminho),
             modificacao,
             tamanho,
-            "Posicoes"
+            "VCRA"
         ).copy()
 
+        base = converter_vcra(base)
+
+        # Verifica os campos necessários para o rastreamento.
         faltantes = [
             coluna
             for coluna in COLUNAS_VCRA
