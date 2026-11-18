@@ -10,16 +10,40 @@ from modules.exportacao import gerar_excel, resumo_texto
 # FUNÇÕES AUXILIARES
 # ==========================================
 
+def _normalizar_texto(serie):
+    """
+    Padroniza textos para comparação:
+    - Remove espaços extras nas extremidades.
+    - Converte para maiúsculas.
+    - Trata valores vazios.
+    """
+    return (
+        serie.astype("string")
+        .str.strip()
+        .str.upper()
+        .fillna("")
+    )
+
+
 def _opcoes(df, coluna):
+    """
+    Retorna opções únicas padronizadas para os filtros.
+    """
+
     if coluna not in df.columns:
         return []
 
+    valores = _normalizar_texto(df[coluna])
+
     return sorted(
-        df[coluna].dropna().astype(str).unique().tolist()
+        valor
+        for valor in valores.unique().tolist()
+        if valor
     )
 
 
 def _limpar_filtros():
+
     chaves = [
         "consulta_operacao",
         "consulta_carteira",
@@ -41,10 +65,13 @@ def _limpar_filtros():
 
 
 def _formatar_datas(df, colunas):
+
     exibicao = df.copy()
 
     for coluna in colunas:
+
         if coluna in exibicao.columns:
+
             exibicao[coluna] = pd.to_datetime(
                 exibicao[coluna],
                 errors="coerce"
@@ -77,6 +104,7 @@ def _filtrar_classificados(
     filtrado = df.copy()
 
     if operacao.strip():
+
         filtrado = filtrado[
             filtrado["Operação"].astype(str).str.contains(
                 operacao.strip(),
@@ -86,6 +114,7 @@ def _filtrar_classificados(
         ]
 
     if carteira.strip():
+
         filtrado = filtrado[
             filtrado["Carteira"].astype(str).str.contains(
                 carteira.strip(),
@@ -94,17 +123,22 @@ def _filtrar_classificados(
             )
         ]
 
+    # Sistema: ignora diferenças entre maiúsculas e minúsculas.
     if sistema != "Todos":
+
         filtrado = filtrado[
-            filtrado["Sistema"] == sistema
+            _normalizar_texto(filtrado["Sistema"])
+            == sistema.strip().upper()
         ]
 
     if quantidade > 0:
+
         filtrado = filtrado[
             filtrado["Quantidade"] == quantidade
         ]
 
     if aquisicao:
+
         filtrado = filtrado[
             pd.to_datetime(
                 filtrado["Data de Aquisição"],
@@ -113,6 +147,7 @@ def _filtrar_classificados(
         ]
 
     if vencimento:
+
         filtrado = filtrado[
             pd.to_datetime(
                 filtrado["Data de Vencimento"],
@@ -120,12 +155,22 @@ def _filtrar_classificados(
             ).dt.date == vencimento
         ]
 
+    # Status: PENDENTE, pendente e Pendente são equivalentes.
     if status:
+
+        status_normalizados = [
+            str(valor).strip().upper()
+            for valor in status
+        ]
+
         filtrado = filtrado[
-            filtrado["Status"].isin(status)
+            _normalizar_texto(filtrado["Status"]).isin(
+                status_normalizados
+            )
         ]
 
     if lastro.strip():
+
         filtrado = filtrado[
             filtrado["Lastro"].astype(str).str.contains(
                 lastro.strip(),
@@ -134,17 +179,36 @@ def _filtrar_classificados(
             )
         ]
 
+    # Tipo do ativo: comparação padronizada.
     if tipo:
-        filtrado = filtrado[
-            filtrado["Tipo do Ativo"].isin(tipo)
+
+        tipos_normalizados = [
+            str(valor).strip().upper()
+            for valor in tipo
         ]
 
-    if indicador:
         filtrado = filtrado[
-            filtrado["Indicador"].isin(indicador)
+            _normalizar_texto(filtrado["Tipo do Ativo"]).isin(
+                tipos_normalizados
+            )
+        ]
+
+    # Indicador: comparação padronizada.
+    if indicador:
+
+        indicadores_normalizados = [
+            str(valor).strip().upper()
+            for valor in indicador
+        ]
+
+        filtrado = filtrado[
+            _normalizar_texto(filtrado["Indicador"]).isin(
+                indicadores_normalizados
+            )
         ]
 
     if emitente.strip():
+
         filtrado = filtrado[
             filtrado["Emitente"].astype(str).str.contains(
                 emitente.strip(),
@@ -154,13 +218,21 @@ def _filtrar_classificados(
         ]
 
     if pu_min > 0:
+
         filtrado = filtrado[
-            filtrado["PU Atual"] >= pu_min
+            pd.to_numeric(
+                filtrado["PU Atual"],
+                errors="coerce"
+            ) >= pu_min
         ]
 
     if pu_max > 0:
+
         filtrado = filtrado[
-            filtrado["PU Atual"] <= pu_max
+            pd.to_numeric(
+                filtrado["PU Atual"],
+                errors="coerce"
+            ) <= pu_max
         ]
 
     return filtrado
@@ -183,6 +255,7 @@ def _filtrar_pendentes(
     filtrado = df.copy()
 
     if operacao.strip():
+
         filtrado = filtrado[
             filtrado["OPERAÇÃO"].astype(str).str.contains(
                 operacao.strip(),
@@ -192,6 +265,7 @@ def _filtrar_pendentes(
         ]
 
     if carteira.strip():
+
         filtrado = filtrado[
             filtrado["CARTEIRA"].astype(str).str.contains(
                 carteira.strip(),
@@ -200,17 +274,25 @@ def _filtrar_pendentes(
             )
         ]
 
+    # Sistema: comparação padronizada.
     if sistema != "Todos":
+
         filtrado = filtrado[
-            filtrado["Sistema"] == sistema
+            _normalizar_texto(filtrado["Sistema"])
+            == sistema.strip().upper()
         ]
 
     if quantidade > 0:
+
         filtrado = filtrado[
-            filtrado["QUANTIDADE"] == quantidade
+            pd.to_numeric(
+                filtrado["QUANTIDADE"],
+                errors="coerce"
+            ) == quantidade
         ]
 
     if aquisicao:
+
         filtrado = filtrado[
             pd.to_datetime(
                 filtrado["DATA_AQUISIÇÃO"],
@@ -219,6 +301,7 @@ def _filtrar_pendentes(
         ]
 
     if vencimento:
+
         filtrado = filtrado[
             pd.to_datetime(
                 filtrado["DATA_VENCIMENTO"],
@@ -439,7 +522,7 @@ def tela_consulta(df):
     st.subheader("1. Operações classificadas")
 
     st.caption(
-        "Operações localizadas nas abas Sistema LZ e Sistema XZ."
+        "Operações localizadas nas abas BASE dos sistemas LZ e XZ."
     )
 
     if filtrado.empty:
@@ -546,9 +629,7 @@ def tela_consulta(df):
     st.subheader("2. Operações pendentes")
 
     st.caption(
-        "Operações encontradas na aba Pendentes. "
-        "Esses registros indicam que a carta ou o protocolo "
-        "não está disponível na base de classificação."
+        "Operações encontradas na aba PENDENTES."
     )
 
     if pendentes_filtrados.empty:
