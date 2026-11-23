@@ -1,6 +1,7 @@
 
 from pathlib import Path
 import re
+import unicodedata
 
 import pandas as pd
 import streamlit as st
@@ -94,11 +95,28 @@ COLUNAS_VCRA = [
 # ==========================================
 
 def normalizar_cabecalho(coluna):
+
     return (
         str(coluna)
         .strip()
         .upper()
         .replace("\n", " ")
+    )
+
+
+def normalizar_cabecalho_vcra(coluna):
+
+    texto = str(coluna).strip().upper()
+
+    texto = unicodedata.normalize(
+        "NFKD",
+        texto
+    ).encode("ASCII", "ignore").decode("ASCII")
+
+    return re.sub(
+        r"[^A-Z0-9]",
+        "",
+        texto
     )
 
 
@@ -123,6 +141,7 @@ def converter_data_segura(valor):
 
         # Número serial do Excel.
         if 20000 <= numero <= 80000:
+
             return pd.to_datetime(
                 numero,
                 unit="D",
@@ -136,6 +155,7 @@ def converter_data_segura(valor):
             texto = str(int(numero))
 
             if re.fullmatch(r"\d{8}", texto):
+
                 return pd.to_datetime(
                     texto,
                     format="%Y%m%d",
@@ -155,6 +175,7 @@ def converter_data_segura(valor):
         "nat",
         "null"
     ]:
+
         return pd.NaT
 
     # Data no formato AAAAMMDD.
@@ -175,6 +196,7 @@ def converter_data_segura(valor):
         numero = float(texto)
 
         if 20000 <= numero <= 80000:
+
             return pd.to_datetime(
                 numero,
                 unit="D",
@@ -400,7 +422,6 @@ def carregar_bases():
                 sistema
             )
 
-            # Converter datas.
             for coluna in [
                 "Data de Aquisição",
                 "Data de Vencimento"
@@ -411,19 +432,16 @@ def carregar_bases():
                     coluna
                 )
 
-            # Quantidade.
             base["Quantidade"] = pd.to_numeric(
                 base["Quantidade"],
                 errors="coerce"
             )
 
-            # PU.
             base["PU Atual"] = pd.to_numeric(
                 base["PU Atual"],
                 errors="coerce"
             )
 
-            # Protocolo.
             base["Protocolo"] = (
                 base["Protocolo"]
                 .fillna("")
@@ -721,24 +739,68 @@ def converter_vcra(base):
 
     base = base.copy()
 
+    # Normaliza os nomes técnicos para reconhecer
+    # variações de cabeçalho da exportação do VCRA.
     base.columns = [
-        normalizar_cabecalho(coluna)
+        normalizar_cabecalho_vcra(coluna)
         for coluna in base.columns
     ]
 
     mapeamento = {
+
+        # Data de posição.
         "DATA_POSICAO": "Data de Posição",
+        "DATAPOSICAO": "Data de Posição",
+        "DATA_POSIC": "Data de Posição",
+        "DATAPOSIC": "Data de Posição",
+        "DT_POSICAO": "Data de Posição",
+        "DTPOSICAO": "Data de Posição",
+
+        # Carteira.
         "SIGLA_CARTEIRA": "Carteira",
+        "SIGLACARTEIRA": "Carteira",
+
+        # Operação.
         "CODIGO_OPERACAO": "Operação",
+        "CODIGOOPERACAO": "Operação",
+        "CD_OPERACAO": "Operação",
+        "CDOPERACAO": "Operação",
+
+        # Lastro.
         "CODIGO_LASTRO": "Lastro",
+        "CODIGOLASTRO": "Lastro",
+
+        # Tipo do ativo.
         "TIPO_ATIVO": "Tipo do Ativo",
+        "TIPOATIVO": "Tipo do Ativo",
+
+        # Emitente.
         "CODIGO_EMITENTE": "Emitente",
+        "CODIGOEMITENTE": "Emitente",
+
+        # Aquisição.
         "DATA_AQUISICAO": "Data de Aquisição",
+        "DATAAQUISICAO": "Data de Aquisição",
+
+        # Vencimento.
         "DATA_VENCIMENTO": "Data de Vencimento",
+        "DATAVENCIMENTO": "Data de Vencimento",
+
+        # Quantidade.
         "QUANTIDADE_TOTAL": "Quantidade",
+        "QUANTIDADETOTAL": "Quantidade",
+
+        # PU.
         "VALOR_PU": "PU Atual",
+        "VALORPU": "PU Atual",
+
+        # Sistema.
         "CODIGO_SISTEMA": "Sistema",
-        "INDICADOR_NEGOCIACAO_VENCIMENTO": "Indicador"
+        "CODIGOSISTEMA": "Sistema",
+
+        # Indicador.
+        "INDICADOR_NEGOCIACAO_VENCIMENTO": "Indicador",
+        "INDICADORNEGOCIACAOVENCIMENTO": "Indicador"
     }
 
     return base.rename(columns=mapeamento)
@@ -773,9 +835,10 @@ def carregar_vcra():
             "VCRA"
         ).copy()
 
+        # Converter os cabeçalhos técnicos.
         base = converter_vcra(base)
 
-        # Validar colunas obrigatórias antes de selecionar.
+        # Validar colunas obrigatórias.
         faltantes = [
             coluna
             for coluna in COLUNAS_VCRA
@@ -787,7 +850,11 @@ def carregar_vcra():
             return pd.DataFrame(
                 columns=COLUNAS_VCRA
             ), [
-                f"Colunas ausentes na base VCRA: {', '.join(faltantes)}."
+                (
+                    "Colunas ausentes na base VCRA: "
+                    f"{', '.join(faltantes)}. "
+                    "Confira os cabeçalhos da exportação."
+                )
             ]
 
         base = base[COLUNAS_VCRA].copy()
@@ -826,10 +893,49 @@ def carregar_vcra():
                 .str.strip()
             )
 
-        # Manter registros com data de posição.
+        # Remover somente linhas sem data de posição.
         base = base.dropna(
             subset=["Data de Posição"]
+        ).copy()
+
+        # Identificar todas as datas existentes.
+        datas_identificadas = sorted(
+            base["Data de Posição"]
+            .dt.normalize()
+            .dropna()
+            .unique()
         )
+
+        # Informar a quantidade de datas encontradas.
+        if len(datas_identificadas) == 0:
+
+            avisos.append(
+                "Nenhuma data de posição válida foi encontrada no VCRA."
+            )
+
+        elif len(datas_identificadas) == 1:
+
+            data_unica = pd.Timestamp(
+                datas_identificadas[0]
+            ).strftime("%d/%m/%Y")
+
+            avisos.append(
+                "O VCRA foi carregado, mas contém somente uma "
+                f"data de posição identificada: {data_unica}."
+            )
+
+        else:
+
+            datas_texto = [
+                pd.Timestamp(data).strftime("%d/%m/%Y")
+                for data in datas_identificadas
+            ]
+
+            avisos.append(
+                f"VCRA carregado: {len(datas_identificadas)} "
+                "datas de posição identificadas: "
+                + ", ".join(datas_texto)
+            )
 
         return base, avisos
 
