@@ -739,8 +739,6 @@ def converter_vcra(base):
 
     base = base.copy()
 
-    # Normaliza os nomes técnicos para reconhecer
-    # variações de cabeçalho da exportação do VCRA.
     base.columns = [
         normalizar_cabecalho_vcra(coluna)
         for coluna in base.columns
@@ -748,58 +746,19 @@ def converter_vcra(base):
 
     mapeamento = {
 
-        # Data de posição.
-        "DATA_POSICAO": "Data de Posição",
         "DATAPOSICAO": "Data de Posição",
-        "DATA_POSIC": "Data de Posição",
-        "DATAPOSIC": "Data de Posição",
-        "DT_POSICAO": "Data de Posição",
-        "DTPOSICAO": "Data de Posição",
+        "DATA_POSICAO": "Data de Posição",
 
-        # Carteira.
-        "SIGLA_CARTEIRA": "Carteira",
         "SIGLACARTEIRA": "Carteira",
-
-        # Operação.
-        "CODIGO_OPERACAO": "Operação",
         "CODIGOOPERACAO": "Operação",
-        "CD_OPERACAO": "Operação",
-        "CDOPERACAO": "Operação",
-
-        # Lastro.
-        "CODIGO_LASTRO": "Lastro",
         "CODIGOLASTRO": "Lastro",
-
-        # Tipo do ativo.
-        "TIPO_ATIVO": "Tipo do Ativo",
         "TIPOATIVO": "Tipo do Ativo",
-
-        # Emitente.
-        "CODIGO_EMITENTE": "Emitente",
         "CODIGOEMITENTE": "Emitente",
-
-        # Aquisição.
-        "DATA_AQUISICAO": "Data de Aquisição",
         "DATAAQUISICAO": "Data de Aquisição",
-
-        # Vencimento.
-        "DATA_VENCIMENTO": "Data de Vencimento",
         "DATAVENCIMENTO": "Data de Vencimento",
-
-        # Quantidade.
-        "QUANTIDADE_TOTAL": "Quantidade",
         "QUANTIDADETOTAL": "Quantidade",
-
-        # PU.
-        "VALOR_PU": "PU Atual",
         "VALORPU": "PU Atual",
-
-        # Sistema.
-        "CODIGO_SISTEMA": "Sistema",
         "CODIGOSISTEMA": "Sistema",
-
-        # Indicador.
-        "INDICADOR_NEGOCIACAO_VENCIMENTO": "Indicador",
         "INDICADORNEGOCIACAOVENCIMENTO": "Indicador"
     }
 
@@ -835,7 +794,6 @@ def carregar_vcra():
             "VCRA"
         ).copy()
 
-        # Converter os cabeçalhos técnicos.
         base = converter_vcra(base)
 
         # Validar colunas obrigatórias.
@@ -852,8 +810,7 @@ def carregar_vcra():
             ), [
                 (
                     "Colunas ausentes na base VCRA: "
-                    f"{', '.join(faltantes)}. "
-                    "Confira os cabeçalhos da exportação."
+                    f"{', '.join(faltantes)}."
                 )
             ]
 
@@ -870,6 +827,15 @@ def carregar_vcra():
                 base,
                 coluna
             )
+
+        # IMPORTANTE:
+        # Algumas exportações do VCRA apresentam a data
+        # somente na primeira linha de cada bloco.
+        # As células abaixo podem ficar vazias ou mescladas.
+        # Preenchemos essas linhas com a última data válida.
+        base["Data de Posição"] = (
+            base["Data de Posição"].ffill()
+        )
 
         # Converter quantidade.
         base["Quantidade"] = pd.to_numeric(
@@ -893,12 +859,12 @@ def carregar_vcra():
                 .str.strip()
             )
 
-        # Remover somente linhas sem data de posição.
+        # Remover registros sem data de posição.
         base = base.dropna(
             subset=["Data de Posição"]
         ).copy()
 
-        # Identificar todas as datas existentes.
+        # Identificar todas as datas diferentes.
         datas_identificadas = sorted(
             base["Data de Posição"]
             .dt.normalize()
@@ -906,7 +872,6 @@ def carregar_vcra():
             .unique()
         )
 
-        # Informar a quantidade de datas encontradas.
         if len(datas_identificadas) == 0:
 
             avisos.append(
