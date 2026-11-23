@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import re
 
 import pandas as pd
 import streamlit as st
@@ -20,6 +21,7 @@ DATA_DIR = ROOT / "data"
 COLUNAS = [
     "Carteira",
     "Operação",
+    "Protocolo",
     "Data de Aquisição",
     "Data de Vencimento",
     "Quantidade",
@@ -88,11 +90,10 @@ COLUNAS_VCRA = [
 
 
 # ==========================================
-# CONVERSÃO DOS CABEÇALHOS
+# NORMALIZAÇÃO DE CABEÇALHOS
 # ==========================================
 
 def normalizar_cabecalho(coluna):
-
     return (
         str(coluna)
         .strip()
@@ -101,12 +102,111 @@ def normalizar_cabecalho(coluna):
     )
 
 
-def converter_base_rastro(base, sistema_padrao):
+# ==========================================
+# CONVERSÃO SEGURA DE DATAS
+# ==========================================
 
-    """
-    Converte os cabeçalhos das abas BASE das planilhas
-    LZ e XZ para os nomes internos utilizados pelo RASTRO.
-    """
+def converter_data_segura(valor):
+
+    if pd.isna(valor):
+        return pd.NaT
+
+    if isinstance(valor, pd.Timestamp):
+        return valor
+
+    if isinstance(valor, (int, float)):
+
+        numero = float(valor)
+
+        if numero <= 0:
+            return pd.NaT
+
+        # Número serial do Excel.
+        if 20000 <= numero <= 80000:
+            return pd.to_datetime(
+                numero,
+                unit="D",
+                origin="1899-12-30",
+                errors="coerce"
+            )
+
+        # Formato numérico AAAAMMDD.
+        if numero.is_integer():
+
+            texto = str(int(numero))
+
+            if re.fullmatch(r"\d{8}", texto):
+                return pd.to_datetime(
+                    texto,
+                    format="%Y%m%d",
+                    errors="coerce"
+                )
+
+        return pd.NaT
+
+    texto = str(valor).strip()
+
+    if texto.lower() in [
+        "",
+        "0",
+        "0.0",
+        "nan",
+        "none",
+        "nat",
+        "null"
+    ]:
+        return pd.NaT
+
+    # Data no formato AAAAMMDD.
+    if re.fullmatch(r"\d{8}", texto):
+
+        data = pd.to_datetime(
+            texto,
+            format="%Y%m%d",
+            errors="coerce"
+        )
+
+        if not pd.isna(data):
+            return data
+
+    # Número serial do Excel armazenado como texto.
+    if re.fullmatch(r"\d+(\.\d+)?", texto):
+
+        numero = float(texto)
+
+        if 20000 <= numero <= 80000:
+            return pd.to_datetime(
+                numero,
+                unit="D",
+                origin="1899-12-30",
+                errors="coerce"
+            )
+
+        return pd.NaT
+
+    return pd.to_datetime(
+        texto,
+        errors="coerce",
+        dayfirst=True
+    )
+
+
+def converter_coluna_data(base, coluna):
+
+    if coluna in base.columns:
+
+        base[coluna] = base[coluna].apply(
+            converter_data_segura
+        )
+
+    return base
+
+
+# ==========================================
+# CONVERTER BASE PRINCIPAL
+# ==========================================
+
+def converter_base_rastro(base, sistema_padrao):
 
     base = base.copy()
 
@@ -119,17 +219,28 @@ def converter_base_rastro(base, sistema_padrao):
         "SISTEMA": "Sistema",
         "CD OPERAÇÃO": "Operação",
         "CARTEIRA": "Carteira",
-        "TIPO": "Tipo do Ativo",
+        "PROTOCOLO": "Protocolo",
+        "DT DIGITAÇÃO": "Data de Aquisição",
+        "DT DIGITACAO": "Data de Aquisição",
+        "DT AQUISIÇÃO": "Data de Aquisição",
+        "DT AQUISICAO": "Data de Aquisição",
         "DT VENCIMENTO": "Data de Vencimento",
-        "LASTRO": "Lastro",
         "QDE": "Quantidade",
+        "TIPO": "Tipo do Ativo",
+        "LASTRO": "Lastro",
         "NEG/VENC": "Indicador",
         "CNPJ": "Emitente"
     }
 
     base = base.rename(columns=mapeamento)
 
+    # NEG/VENC alimenta Indicador e Status.
+    if "Indicador" in base.columns:
+        base["Status"] = base["Indicador"].copy()
+
+    # Campos opcionais da BASE.
     campos_opcionais = [
+        "Protocolo",
         "Data de Aquisição",
         "Status",
         "PU Atual"
@@ -140,6 +251,7 @@ def converter_base_rastro(base, sistema_padrao):
         if coluna not in base.columns:
             base[coluna] = None
 
+    # Sistema.
     if "Sistema" not in base.columns:
 
         base["Sistema"] = sistema_padrao
@@ -158,6 +270,7 @@ def converter_base_rastro(base, sistema_padrao):
             "Sistema"
         ] = sistema_padrao
 
+    # Garantir todas as colunas internas.
     for coluna in COLUNAS:
 
         if coluna not in base.columns:
@@ -166,14 +279,11 @@ def converter_base_rastro(base, sistema_padrao):
     return base[COLUNAS].copy()
 
 
+# ==========================================
+# CONVERTER PENDENTES
+# ==========================================
+
 def converter_pendentes(base, sistema_padrao):
-
-    """
-    Converte os cabeçalhos da aba PENDENTES
-    para a estrutura interna do RASTRO.
-
-    A estrutura de PENDENTES não possui Data de Aquisição.
-    """
 
     base = base.copy()
 
@@ -232,7 +342,7 @@ def _identificar_engine(caminho):
 
 
 # ==========================================
-# LEITURA DE EXCEL
+# LEITURA DE EXCEL LZ E XZ
 # ==========================================
 
 @st.cache_data
@@ -261,8 +371,8 @@ def carregar_bases():
     avisos = []
 
     arquivos = [
-        ("Base_RASTRO_LZ.xlsm", "LZ"),
-        ("Base_RASTRO_XZ.xlsm", "XZ")
+        ("Base_LZ.xlsb", "LZ"),
+        ("Base_XZ.xlsb", "XZ")
     ]
 
     for nome, sistema in arquivos:
@@ -290,26 +400,43 @@ def carregar_bases():
                 sistema
             )
 
+            # Converter datas.
             for coluna in [
                 "Data de Aquisição",
                 "Data de Vencimento"
             ]:
 
-                base[coluna] = pd.to_datetime(
-                    base[coluna],
-                    errors="coerce",
-                    dayfirst=True
+                base = converter_coluna_data(
+                    base,
+                    coluna
                 )
 
+            # Quantidade.
             base["Quantidade"] = pd.to_numeric(
                 base["Quantidade"],
                 errors="coerce"
             )
 
+            # PU.
             base["PU Atual"] = pd.to_numeric(
                 base["PU Atual"],
                 errors="coerce"
             )
+
+            # Protocolo.
+            base["Protocolo"] = (
+                base["Protocolo"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+            )
+
+            base.loc[
+                base["Protocolo"].str.lower().isin(
+                    ["nan", "none", "null"]
+                ),
+                "Protocolo"
+            ] = ""
 
             partes.append(base)
 
@@ -339,8 +466,8 @@ def carregar_pendentes():
     avisos = []
 
     arquivos = [
-        ("Base_RASTRO_LZ.xlsm", "LZ"),
-        ("Base_RASTRO_XZ.xlsm", "XZ")
+        ("Base_LZ.xlsb", "LZ"),
+        ("Base_XZ.xlsb", "XZ")
     ]
 
     for nome, sistema in arquivos:
@@ -387,10 +514,9 @@ def carregar_pendentes():
                 errors="coerce"
             )
 
-            base["DATA_VENCIMENTO"] = pd.to_datetime(
-                base["DATA_VENCIMENTO"],
-                errors="coerce",
-                dayfirst=True
+            base = converter_coluna_data(
+                base,
+                "DATA_VENCIMENTO"
             )
 
             base = base[
@@ -579,12 +705,10 @@ def _ler_excel_vcra(
     aba: str
 ) -> pd.DataFrame:
 
-    engine = _identificar_engine(caminho)
-
     return pd.read_excel(
         caminho,
         sheet_name=aba,
-        engine=engine,
+        engine="openpyxl",
         header=8
     )
 
@@ -594,14 +718,6 @@ def _ler_excel_vcra(
 # ==========================================
 
 def converter_vcra(base):
-
-    """
-    Converte os cabeçalhos originais da planilha VCRA
-    para os nomes internos utilizados pelo RASTRO.
-
-    Não cria colunas ausentes. A validação é feita
-    posteriormente em carregar_vcra().
-    """
 
     base = base.copy()
 
@@ -634,7 +750,7 @@ def converter_vcra(base):
 
 def carregar_vcra():
 
-    caminho = DATA_DIR / "Base_VCRA.xlsb"
+    caminho = DATA_DIR / "Base_VCRA.xlsm"
     avisos = []
 
     if not caminho.exists():
@@ -642,7 +758,7 @@ def carregar_vcra():
         return pd.DataFrame(
             columns=COLUNAS_VCRA
         ), [
-            "Arquivo Base_VCRA.xlsb não encontrado na pasta data."
+            "Arquivo Base_VCRA.xlsm não encontrado na pasta data."
         ]
 
     try:
@@ -659,7 +775,7 @@ def carregar_vcra():
 
         base = converter_vcra(base)
 
-        # Verifica os campos obrigatórios antes de selecionar.
+        # Validar colunas obrigatórias antes de selecionar.
         faltantes = [
             coluna
             for coluna in COLUNAS_VCRA
@@ -683,10 +799,9 @@ def carregar_vcra():
             "Data de Vencimento"
         ]:
 
-            base[coluna] = pd.to_datetime(
-                base[coluna],
-                errors="coerce",
-                dayfirst=True
+            base = converter_coluna_data(
+                base,
+                coluna
             )
 
         # Converter quantidade.
@@ -695,7 +810,7 @@ def carregar_vcra():
             errors="coerce"
         )
 
-        # Normalizar campos de texto.
+        # Normalizar textos.
         for coluna in [
             "Carteira",
             "Operação",
@@ -711,7 +826,7 @@ def carregar_vcra():
                 .str.strip()
             )
 
-        # Manter somente registros com data de posição.
+        # Manter registros com data de posição.
         base = base.dropna(
             subset=["Data de Posição"]
         )

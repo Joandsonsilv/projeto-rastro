@@ -17,6 +17,7 @@ def _normalizar_texto(serie):
     - Converte para maiúsculas.
     - Trata valores vazios.
     """
+
     return (
         serie.astype("string")
         .str.strip()
@@ -40,6 +41,24 @@ def _opcoes(df, coluna):
         for valor in valores.unique().tolist()
         if valor
     )
+
+
+def _garantir_colunas(df, colunas):
+    """
+    Garante que as colunas utilizadas nos filtros existam.
+
+    Evita erros quando alguma planilha não possui
+    determinada coluna.
+    """
+
+    resultado = df.copy()
+
+    for coluna in colunas:
+
+        if coluna not in resultado.columns:
+            resultado[coluna] = pd.NA
+
+    return resultado
 
 
 def _limpar_filtros():
@@ -101,29 +120,54 @@ def _filtrar_classificados(
     pu_max
 ):
 
-    filtrado = df.copy()
+    colunas_necessarias = [
+        "Operação",
+        "Carteira",
+        "Sistema",
+        "Quantidade",
+        "Data de Aquisição",
+        "Data de Vencimento",
+        "Status",
+        "Lastro",
+        "Tipo do Ativo",
+        "Indicador",
+        "Emitente",
+        "PU Atual"
+    ]
+
+    filtrado = _garantir_colunas(
+        df,
+        colunas_necessarias
+    )
+
+    # Operação
 
     if operacao.strip():
 
         filtrado = filtrado[
-            filtrado["Operação"].astype(str).str.contains(
+            filtrado["Operação"].astype("string").str.contains(
                 operacao.strip(),
                 case=False,
-                na=False
+                na=False,
+                regex=False
             )
         ]
+
+    # Carteira
 
     if carteira.strip():
 
         filtrado = filtrado[
-            filtrado["Carteira"].astype(str).str.contains(
+            filtrado["Carteira"].astype("string").str.contains(
                 carteira.strip(),
                 case=False,
-                na=False
+                na=False,
+                regex=False
             )
         ]
 
-    # Sistema: ignora diferenças entre maiúsculas e minúsculas.
+    # Sistema
+
     if sistema != "Todos":
 
         filtrado = filtrado[
@@ -131,11 +175,18 @@ def _filtrar_classificados(
             == sistema.strip().upper()
         ]
 
+    # Quantidade
+
     if quantidade > 0:
 
         filtrado = filtrado[
-            filtrado["Quantidade"] == quantidade
+            pd.to_numeric(
+                filtrado["Quantidade"],
+                errors="coerce"
+            ) == quantidade
         ]
+
+    # Data de Aquisição
 
     if aquisicao:
 
@@ -146,6 +197,8 @@ def _filtrar_classificados(
             ).dt.date == aquisicao
         ]
 
+    # Data de Vencimento
+
     if vencimento:
 
         filtrado = filtrado[
@@ -155,7 +208,8 @@ def _filtrar_classificados(
             ).dt.date == vencimento
         ]
 
-    # Status: PENDENTE, pendente e Pendente são equivalentes.
+    # Status
+
     if status:
 
         status_normalizados = [
@@ -169,17 +223,21 @@ def _filtrar_classificados(
             )
         ]
 
+    # Lastro
+
     if lastro.strip():
 
         filtrado = filtrado[
-            filtrado["Lastro"].astype(str).str.contains(
+            filtrado["Lastro"].astype("string").str.contains(
                 lastro.strip(),
                 case=False,
-                na=False
+                na=False,
+                regex=False
             )
         ]
 
-    # Tipo do ativo: comparação padronizada.
+    # Tipo do Ativo
+
     if tipo:
 
         tipos_normalizados = [
@@ -193,7 +251,8 @@ def _filtrar_classificados(
             )
         ]
 
-    # Indicador: comparação padronizada.
+    # Indicador
+
     if indicador:
 
         indicadores_normalizados = [
@@ -207,15 +266,20 @@ def _filtrar_classificados(
             )
         ]
 
+    # Emitente
+
     if emitente.strip():
 
         filtrado = filtrado[
-            filtrado["Emitente"].astype(str).str.contains(
+            filtrado["Emitente"].astype("string").str.contains(
                 emitente.strip(),
                 case=False,
-                na=False
+                na=False,
+                regex=False
             )
         ]
+
+    # PU mínimo
 
     if pu_min > 0:
 
@@ -225,6 +289,8 @@ def _filtrar_classificados(
                 errors="coerce"
             ) >= pu_min
         ]
+
+    # PU máximo
 
     if pu_max > 0:
 
@@ -248,39 +314,58 @@ def _filtrar_pendentes(
     carteira,
     sistema,
     quantidade,
-    aquisicao,
     vencimento
 ):
 
-    filtrado = df.copy()
+    colunas_necessarias = [
+        "OPERAÇÃO",
+        "CARTEIRA",
+        "QUANTIDADE",
+        "DATA_VENCIMENTO",
+        "Sistema"
+    ]
+
+    filtrado = _garantir_colunas(
+        df,
+        colunas_necessarias
+    )
+
+    # Operação
 
     if operacao.strip():
 
         filtrado = filtrado[
-            filtrado["OPERAÇÃO"].astype(str).str.contains(
+            filtrado["OPERAÇÃO"].astype("string").str.contains(
                 operacao.strip(),
                 case=False,
-                na=False
+                na=False,
+                regex=False
             )
         ]
+
+    # Carteira
 
     if carteira.strip():
 
         filtrado = filtrado[
-            filtrado["CARTEIRA"].astype(str).str.contains(
+            filtrado["CARTEIRA"].astype("string").str.contains(
                 carteira.strip(),
                 case=False,
-                na=False
+                na=False,
+                regex=False
             )
         ]
 
-    # Sistema: comparação padronizada.
+    # Sistema
+
     if sistema != "Todos":
 
         filtrado = filtrado[
             _normalizar_texto(filtrado["Sistema"])
             == sistema.strip().upper()
         ]
+
+    # Quantidade
 
     if quantidade > 0:
 
@@ -291,14 +376,10 @@ def _filtrar_pendentes(
             ) == quantidade
         ]
 
-    if aquisicao:
+    # A base PENDENTES não possui DATA_AQUISIÇÃO.
+    # Portanto, não aplicamos o filtro de aquisição aqui.
 
-        filtrado = filtrado[
-            pd.to_datetime(
-                filtrado["DATA_AQUISIÇÃO"],
-                errors="coerce"
-            ).dt.date == aquisicao
-        ]
+    # Data de Vencimento
 
     if vencimento:
 
@@ -467,13 +548,15 @@ def tela_consulta(df):
         pu_max
     )
 
+    # A data de aquisição é aplicada somente
+    # às operações classificadas.
+
     pendentes_filtrados = _filtrar_pendentes(
         df_pendentes,
         operacao,
         carteira,
         sistema,
         quantidade,
-        aquisicao,
         vencimento
     )
 

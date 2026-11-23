@@ -63,13 +63,6 @@ def validar_base(df):
         "Sistema"
     ]
 
-    campos_opcionais = [
-        "Data de Aquisição",
-        "Status",
-        "Indicador",
-        "PU Atual"
-    ]
-
     colunas_disponiveis = set(df.columns)
 
     def adicionar_problema(row, campo, motivo):
@@ -112,8 +105,15 @@ def validar_base(df):
 
         if "Data de Aquisição" in colunas_disponiveis:
 
-            data_aquisicao = row.get("Data de Aquisição")
-            data_vencimento = row.get("Data de Vencimento")
+            data_aquisicao = pd.to_datetime(
+                row.get("Data de Aquisição"),
+                errors="coerce"
+            )
+
+            data_vencimento = pd.to_datetime(
+                row.get("Data de Vencimento"),
+                errors="coerce"
+            )
 
             if (
                 pd.notna(data_aquisicao)
@@ -134,12 +134,17 @@ def validar_base(df):
 
         if "Quantidade" in colunas_disponiveis:
 
+            quantidade_original = row.get("Quantidade")
+
             quantidade = pd.to_numeric(
-                pd.Series([row.get("Quantidade")]),
+                pd.Series([quantidade_original]),
                 errors="coerce"
             ).iloc[0]
 
-            if pd.notna(row.get("Quantidade")) and pd.isna(quantidade):
+            if (
+                pd.notna(quantidade_original)
+                and pd.isna(quantidade)
+            ):
 
                 adicionar_problema(
                     row,
@@ -161,12 +166,14 @@ def validar_base(df):
 
         if "PU Atual" in colunas_disponiveis:
 
+            pu_original = row.get("PU Atual")
+
             pu = pd.to_numeric(
-                pd.Series([row.get("PU Atual")]),
+                pd.Series([pu_original]),
                 errors="coerce"
             ).iloc[0]
 
-            if pd.notna(row.get("PU Atual")) and pd.isna(pu):
+            if pd.notna(pu_original) and pd.isna(pu):
 
                 adicionar_problema(
                     row,
@@ -183,29 +190,13 @@ def validar_base(df):
                 )
 
         # ======================================
-        # STATUS
-        # ======================================
-
-        if "Status" in colunas_disponiveis:
-
-            status = normalizar_texto(
-                row.get("Status")
-            )
-
-            if status and status not in [
-                "NEGOCIACAO",
-                "VENCIMENTO"
-            ]:
-
-                adicionar_problema(
-                    row,
-                    "Status",
-                    "Status fora dos valores permitidos"
-                )
-
-        # ======================================
         # INDICADOR
         # ======================================
+
+        # A informação original vem da coluna NEG/VENC.
+        # Indicador é utilizado como referência da validação.
+        # Status permanece disponível para compatibilidade
+        # com outras funcionalidades do sistema.
 
         if "Indicador" in colunas_disponiveis:
 

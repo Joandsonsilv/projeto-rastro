@@ -72,18 +72,57 @@ def obter_movimentacoes_vcra():
     if df_vcra.empty:
         return pd.DataFrame(), avisos
 
+    df_vcra = df_vcra.copy()
+
+    # Verifica se a coluna de posição existe.
+    if "Data de Posição" not in df_vcra.columns:
+
+        avisos.append(
+            "Não foi possível identificar a coluna Data de Posição "
+            "na base VCRA."
+        )
+
+        return pd.DataFrame(), avisos
+
+    # Garante que a coluna esteja em formato de data.
+    df_vcra["Data de Posição"] = pd.to_datetime(
+        df_vcra["Data de Posição"],
+        errors="coerce"
+    )
+
+    # Remove registros sem data de posição.
+    df_vcra = df_vcra[
+        df_vcra["Data de Posição"].notna()
+    ].copy()
+
+    if df_vcra.empty:
+
+        avisos.append(
+            "A base VCRA não possui datas de posição válidas."
+        )
+
+        return pd.DataFrame(), avisos
+
     datas = sorted(
         df_vcra["Data de Posição"]
-        .dropna()
         .dt.date
         .unique()
     )
 
+    # Uma única data não permite comparação.
     if len(datas) < 2:
+
+        avisos.append(
+            "O acompanhamento de movimentações precisa de pelo "
+            "menos duas datas de posição distintas no VCRA. "
+            "A base atual possui apenas uma data."
+        )
+
         return pd.DataFrame(), avisos
 
     resultados = []
 
+    # Compara cada posição com a posição imediatamente anterior.
     for indice in range(1, len(datas)):
 
         data_anterior = datas[indice - 1]
@@ -212,10 +251,16 @@ def tela_dashboard(df, df_auditorias=None):
     # PREPARAR BASE DE OPERAÇÕES
     # ======================================
 
+    if "Quantidade" not in base_original.columns:
+        base_original["Quantidade"] = 0
+
     base_original["Quantidade"] = pd.to_numeric(
         base_original["Quantidade"],
         errors="coerce"
     ).fillna(0)
+
+    if "Data de Vencimento" not in base_original.columns:
+        base_original["Data de Vencimento"] = pd.NaT
 
     base_original["Data de Vencimento"] = pd.to_datetime(
         base_original["Data de Vencimento"],
@@ -229,7 +274,8 @@ def tela_dashboard(df, df_auditorias=None):
         "Carteira",
         "Sistema",
         "Tipo do Ativo",
-        "Status"
+        "Status",
+        "Indicador"
     ]
 
     for coluna in colunas_texto:
@@ -240,6 +286,41 @@ def tela_dashboard(df, df_auditorias=None):
                 base_original,
                 coluna
             )
+
+    # Se Status não estiver disponível, utiliza Indicador.
+    if "Status" not in base_original.columns:
+
+        if "Indicador" in base_original.columns:
+            base_original["Status"] = base_original["Indicador"]
+        else:
+            base_original["Status"] = ""
+
+    # Se Status estiver vazio, utiliza Indicador como alternativa.
+    elif "Indicador" in base_original.columns:
+
+        base_original["Status"] = (
+            base_original["Status"]
+            .replace("", pd.NA)
+            .fillna(base_original["Indicador"])
+            .fillna("")
+        )
+
+    # ======================================
+    # GARANTIR COLUNAS UTILIZADAS
+    # ======================================
+
+    colunas_necessarias = [
+        "Carteira",
+        "Sistema",
+        "Tipo do Ativo",
+        "Status",
+        "Operação"
+    ]
+
+    for coluna in colunas_necessarias:
+
+        if coluna not in base_original.columns:
+            base_original[coluna] = ""
 
     # ======================================
     # FILTROS GERAIS
@@ -401,6 +482,7 @@ def tela_dashboard(df, df_auditorias=None):
 
             por_sistema = (
                 base["Sistema"]
+                .replace("", "NÃO INFORMADO")
                 .value_counts()
                 .rename_axis("Sistema")
                 .reset_index(name="Operações")
@@ -429,6 +511,7 @@ def tela_dashboard(df, df_auditorias=None):
 
             por_tipo = (
                 base["Tipo do Ativo"]
+                .replace("", "NÃO INFORMADO")
                 .value_counts()
                 .rename_axis("Tipo")
                 .reset_index(name="Operações")
@@ -488,6 +571,7 @@ def tela_dashboard(df, df_auditorias=None):
 
             por_carteira = (
                 base["Carteira"]
+                .replace("", "NÃO INFORMADO")
                 .value_counts()
                 .head(10)
                 .rename_axis("Carteira")
@@ -523,93 +607,105 @@ def tela_dashboard(df, df_auditorias=None):
 
     if not auditorias.empty:
 
-        auditorias["STATUS_NORMALIZADO"] = (
-            auditorias["STATUS"]
-            .apply(normalizar_status)
-        )
+        if (
+            "STATUS" in auditorias.columns
+            and "CARTEIRA" in auditorias.columns
+        ):
 
-        auditorias["CARTEIRA_NORMALIZADA"] = (
-            auditorias["CARTEIRA"]
-            .apply(normalizar_texto)
-        )
-
-        if carteira != "Todas":
-
-            auditorias = auditorias[
-                auditorias["CARTEIRA_NORMALIZADA"]
-                == normalizar_texto(carteira)
-            ]
-
-        total_auditorias = len(auditorias)
-
-        pendentes = int(
-            (
-                auditorias["STATUS_NORMALIZADO"] == "PENDENTE"
-            ).sum()
-        )
-
-        em_andamento = int(
-            (
-                auditorias["STATUS_NORMALIZADO"] == "EM ANDAMENTO"
-            ).sum()
-        )
-
-        concluidas = int(
-            (
-                auditorias["STATUS_NORMALIZADO"] == "CONCLUIDA"
-            ).sum()
-        )
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric(
-            "Total de auditorias",
-            total_auditorias
-        )
-
-        c2.metric(
-            "Pendentes",
-            pendentes
-        )
-
-        c3.metric(
-            "Em andamento",
-            em_andamento
-        )
-
-        c4.metric(
-            "Concluídas",
-            concluidas
-        )
-
-        status_auditorias = (
-            auditorias["STATUS_NORMALIZADO"]
-            .replace("", "NAO INFORMADO")
-            .value_counts()
-            .rename_axis("Status")
-            .reset_index(name="Auditorias")
-        )
-
-        if not status_auditorias.empty:
-
-            fig = px.pie(
-                status_auditorias,
-                names="Status",
-                values="Auditorias",
-                title="Distribuição das auditorias",
-                hole=0.5
+            auditorias["STATUS_NORMALIZADO"] = (
+                auditorias["STATUS"]
+                .apply(normalizar_status)
             )
 
-            st.plotly_chart(
-                fig,
-                use_container_width=True
+            auditorias["CARTEIRA_NORMALIZADA"] = (
+                auditorias["CARTEIRA"]
+                .apply(normalizar_texto)
             )
 
-        st.caption(
-            "As auditorias são filtradas pela carteira selecionada. "
-            "Os filtros de sistema, tipo de ativo e status da operação "
-            "não se aplicam à base de auditorias."
-        )
+            if carteira != "Todas":
+
+                auditorias = auditorias[
+                    auditorias["CARTEIRA_NORMALIZADA"]
+                    == normalizar_texto(carteira)
+                ]
+
+            total_auditorias = len(auditorias)
+
+            pendentes = int(
+                (
+                    auditorias["STATUS_NORMALIZADO"] == "PENDENTE"
+                ).sum()
+            )
+
+            em_andamento = int(
+                (
+                    auditorias["STATUS_NORMALIZADO"] == "EM ANDAMENTO"
+                ).sum()
+            )
+
+            concluidas = int(
+                (
+                    auditorias["STATUS_NORMALIZADO"] == "CONCLUIDA"
+                ).sum()
+            )
+
+            c1, c2, c3, c4 = st.columns(4)
+
+            c1.metric(
+                "Total de auditorias",
+                total_auditorias
+            )
+
+            c2.metric(
+                "Pendentes",
+                pendentes
+            )
+
+            c3.metric(
+                "Em andamento",
+                em_andamento
+            )
+
+            c4.metric(
+                "Concluídas",
+                concluidas
+            )
+
+            status_auditorias = (
+                auditorias["STATUS_NORMALIZADO"]
+                .replace("", "NAO INFORMADO")
+                .value_counts()
+                .rename_axis("Status")
+                .reset_index(name="Auditorias")
+            )
+
+            if not status_auditorias.empty:
+
+                fig = px.pie(
+                    status_auditorias,
+                    names="Status",
+                    values="Auditorias",
+                    title="Distribuição das auditorias",
+                    hole=0.5
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
+
+            st.caption(
+                "As auditorias são filtradas pela carteira selecionada. "
+                "Os filtros de sistema, tipo de ativo e status da operação "
+                "não se aplicam à base de auditorias."
+            )
+
+        else:
+
+            st.warning(
+                "A base de auditorias não possui as colunas "
+                "STATUS e CARTEIRA esperadas."
+            )
 
     else:
 
@@ -658,6 +754,17 @@ def tela_dashboard(df, df_auditorias=None):
             # ----------------------------------
             # SELEÇÃO DO MÊS
             # ----------------------------------
+
+            movimentacoes_filtradas["Data da identificação"] = (
+                pd.to_datetime(
+                    movimentacoes_filtradas["Data da identificação"],
+                    errors="coerce"
+                )
+            )
+
+            movimentacoes_filtradas = movimentacoes_filtradas[
+                movimentacoes_filtradas["Data da identificação"].notna()
+            ].copy()
 
             movimentacoes_filtradas["Mes"] = (
                 movimentacoes_filtradas["Data da identificação"]
@@ -858,9 +965,23 @@ def tela_pendencias(df):
 
     st.title("Painel de Pendências")
 
-    hoje = pd.Timestamp(date.today())
+    if df.empty:
+
+        st.info(
+            "Não existem operações disponíveis para consulta."
+        )
+        return
 
     base = df.copy()
+
+    if "Data de Vencimento" not in base.columns:
+
+        st.error(
+            "A coluna Data de Vencimento não foi encontrada na base."
+        )
+        return
+
+    hoje = pd.Timestamp(date.today())
 
     base["Data de Vencimento"] = pd.to_datetime(
         base["Data de Vencimento"],
@@ -944,10 +1065,14 @@ def tela_pendencias(df):
         "Status"
     ]
 
+    colunas_disponiveis = [
+        coluna
+        for coluna in colunas_exibicao
+        if coluna in base.columns
+    ]
+
     st.dataframe(
-        base[
-            colunas_exibicao
-        ],
+        base[colunas_disponiveis],
         use_container_width=True,
         hide_index=True
     )
@@ -989,8 +1114,18 @@ def tela_base_dados(df):
     a, b, c = st.columns(3)
 
     a.metric("Registros", len(base))
-    b.metric("Carteiras", base["Carteira"].nunique())
-    c.metric("Operações", base["Operação"].nunique())
+
+    b.metric(
+        "Carteiras",
+        base["Carteira"].nunique()
+        if "Carteira" in base.columns else 0
+    )
+
+    c.metric(
+        "Operações",
+        base["Operação"].nunique()
+        if "Operação" in base.columns else 0
+    )
 
     st.dataframe(
         base,

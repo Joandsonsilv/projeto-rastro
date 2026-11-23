@@ -870,9 +870,14 @@ def tela_rastreamento():
             format_func=lambda data: data.strftime("%d/%m/%Y")
         )
 
-    if data_anterior == data_atual:
+    # Impedir comparação invertida ou da mesma data
 
-        st.warning("Selecione duas datas diferentes.")
+    if data_anterior >= data_atual:
+
+        st.warning(
+            "A data anterior precisa ser menor que a data atual. "
+            "Selecione as posições em ordem cronológica."
+        )
         return
 
     posicao_anterior = df[
