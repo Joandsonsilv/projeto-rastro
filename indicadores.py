@@ -62,60 +62,60 @@ def formatar_numero(valor):
 
 
 # ==========================================
-# MOVIMENTAÇÕES DO VCRA
+# MOVIMENTAÇÕES DA CONSULTA AWS
 # ==========================================
 
-def obter_movimentacoes_vcra():
+def obter_movimentacoes_aws():
 
-    df_vcra, avisos = carregar_vcra()
+    # A função carregar_vcra será mantida temporariamente
+    # por compatibilidade com o módulo dados.py.
+    # A fonte dos dados será a consulta AWS.
 
-    if df_vcra.empty:
+    df_aws, avisos = carregar_vcra()
+
+    if df_aws.empty:
         return pd.DataFrame(), avisos
 
-    df_vcra = df_vcra.copy()
+    df_aws = df_aws.copy()
 
-    # Verifica se a coluna de posição existe.
-    if "Data de Posição" not in df_vcra.columns:
+    if "Data de Posição" not in df_aws.columns:
 
         avisos.append(
-            "Não foi possível identificar a coluna Data de Posição "
-            "na base VCRA."
+            "Não foi possível identificar a coluna "
+            "Data de Posição no resultado da consulta AWS."
         )
 
         return pd.DataFrame(), avisos
 
-    # Garante que a coluna esteja em formato de data.
-    df_vcra["Data de Posição"] = pd.to_datetime(
-        df_vcra["Data de Posição"],
+    df_aws["Data de Posição"] = pd.to_datetime(
+        df_aws["Data de Posição"],
         errors="coerce"
     )
 
-    # Remove registros sem data de posição.
-    df_vcra = df_vcra[
-        df_vcra["Data de Posição"].notna()
+    df_aws = df_aws[
+        df_aws["Data de Posição"].notna()
     ].copy()
 
-    if df_vcra.empty:
+    if df_aws.empty:
 
         avisos.append(
-            "A base VCRA não possui datas de posição válidas."
+            "A consulta AWS não retornou datas de posição válidas."
         )
 
         return pd.DataFrame(), avisos
 
     datas = sorted(
-        df_vcra["Data de Posição"]
+        df_aws["Data de Posição"]
         .dt.date
         .unique()
     )
 
-    # Uma única data não permite comparação.
     if len(datas) < 2:
 
         avisos.append(
             "O acompanhamento de movimentações precisa de pelo "
-            "menos duas datas de posição distintas no VCRA. "
-            "A base atual possui apenas uma data."
+            "menos duas datas de posição distintas na consulta AWS. "
+            "O resultado atual possui apenas uma data."
         )
 
         return pd.DataFrame(), avisos
@@ -128,12 +128,12 @@ def obter_movimentacoes_vcra():
         data_anterior = datas[indice - 1]
         data_atual = datas[indice]
 
-        posicao_anterior = df_vcra[
-            df_vcra["Data de Posição"].dt.date == data_anterior
+        posicao_anterior = df_aws[
+            df_aws["Data de Posição"].dt.date == data_anterior
         ].copy()
 
-        posicao_atual = df_vcra[
-            df_vcra["Data de Posição"].dt.date == data_atual
+        posicao_atual = df_aws[
+            df_aws["Data de Posição"].dt.date == data_atual
         ].copy()
 
         comparacao = identificar_movimentacoes(
@@ -167,6 +167,12 @@ def obter_movimentacoes_vcra():
         resultados,
         ignore_index=True
     ), avisos
+
+
+# Mantém compatibilidade caso outro módulo ainda utilize
+# o nome antigo da função.
+def obter_movimentacoes_vcra():
+    return obter_movimentacoes_aws()
 
 
 def filtrar_movimentacoes(
@@ -267,9 +273,6 @@ def tela_dashboard(df, df_auditorias=None):
         errors="coerce"
     )
 
-    # Padronização das colunas de texto.
-    # A alteração ocorre somente na cópia do dashboard.
-
     colunas_texto = [
         "Carteira",
         "Sistema",
@@ -287,7 +290,6 @@ def tela_dashboard(df, df_auditorias=None):
                 coluna
             )
 
-    # Se Status não estiver disponível, utiliza Indicador.
     if "Status" not in base_original.columns:
 
         if "Indicador" in base_original.columns:
@@ -295,7 +297,6 @@ def tela_dashboard(df, df_auditorias=None):
         else:
             base_original["Status"] = ""
 
-    # Se Status estiver vazio, utiliza Indicador como alternativa.
     elif "Indicador" in base_original.columns:
 
         base_original["Status"] = (
@@ -715,14 +716,14 @@ def tela_dashboard(df, df_auditorias=None):
         )
 
     # ======================================
-    # MOVIMENTAÇÕES
+    # MOVIMENTAÇÕES AWS
     # ======================================
 
     st.divider()
 
     st.subheader("Acompanhamento de movimentações")
 
-    movimentacoes, avisos = obter_movimentacoes_vcra()
+    movimentacoes, avisos = obter_movimentacoes_aws()
 
     for aviso in avisos:
         st.warning(aviso)
@@ -731,7 +732,7 @@ def tela_dashboard(df, df_auditorias=None):
 
         st.info(
             "Não existem movimentações identificadas "
-            "entre as posições disponíveis no VCRA."
+            "entre as posições disponíveis na consulta AWS."
         )
 
     else:
@@ -952,8 +953,9 @@ def tela_dashboard(df, df_auditorias=None):
 
             st.caption(
                 "A contagem considera os registros gerados pela comparação "
-                "entre posições consecutivas do VCRA. Uma transferência "
-                "dividida em vários destinos pode gerar mais de um registro."
+                "entre posições consecutivas retornadas pela consulta AWS. "
+                "Uma transferência dividida em vários destinos pode gerar "
+                "mais de um registro."
             )
 
 
@@ -1141,5 +1143,5 @@ def tela_base_dados(df):
     )
 
     st.caption(
-        "A aplicação lê os arquivos originais sem alterá-los."
+        "A aplicação lê as bases originais sem alterá-las."
     )

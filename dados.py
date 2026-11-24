@@ -74,7 +74,7 @@ COLUNAS_OPERACOES_AUDITORIA = [
 
 
 # ==========================================
-# COLUNAS INTERNAS DO VCRA
+# COLUNAS DA CONSULTA DE POSIÇÕES AWS
 # ==========================================
 
 COLUNAS_VCRA = [
@@ -86,7 +86,10 @@ COLUNAS_VCRA = [
     "Quantidade",
     "Tipo do Ativo",
     "Emitente",
-    "Sistema"
+    "Sistema",
+    "PU Atual",
+    "Indicador",
+    "Lastro"
 ]
 
 
@@ -139,7 +142,6 @@ def converter_data_segura(valor):
         if numero <= 0:
             return pd.NaT
 
-        # Número serial do Excel.
         if 20000 <= numero <= 80000:
 
             return pd.to_datetime(
@@ -149,7 +151,6 @@ def converter_data_segura(valor):
                 errors="coerce"
             )
 
-        # Formato numérico AAAAMMDD.
         if numero.is_integer():
 
             texto = str(int(numero))
@@ -178,7 +179,6 @@ def converter_data_segura(valor):
 
         return pd.NaT
 
-    # Data no formato AAAAMMDD.
     if re.fullmatch(r"\d{8}", texto):
 
         data = pd.to_datetime(
@@ -190,7 +190,6 @@ def converter_data_segura(valor):
         if not pd.isna(data):
             return data
 
-    # Número serial do Excel armazenado como texto.
     if re.fullmatch(r"\d+(\.\d+)?", texto):
 
         numero = float(texto)
@@ -256,11 +255,9 @@ def converter_base_rastro(base, sistema_padrao):
 
     base = base.rename(columns=mapeamento)
 
-    # NEG/VENC alimenta Indicador e Status.
     if "Indicador" in base.columns:
         base["Status"] = base["Indicador"].copy()
 
-    # Campos opcionais da BASE.
     campos_opcionais = [
         "Protocolo",
         "Data de Aquisição",
@@ -273,7 +270,6 @@ def converter_base_rastro(base, sistema_padrao):
         if coluna not in base.columns:
             base[coluna] = None
 
-    # Sistema.
     if "Sistema" not in base.columns:
 
         base["Sistema"] = sistema_padrao
@@ -292,7 +288,6 @@ def converter_base_rastro(base, sistema_padrao):
             "Sistema"
         ] = sistema_padrao
 
-    # Garantir todas as colunas internas.
     for coluna in COLUNAS:
 
         if coluna not in base.columns:
@@ -712,27 +707,50 @@ garantir_base_operacoes_auditoria()
 
 
 # ==========================================
-# LEITURA DO VCRA
+# CONEXÃO AWS / ATHENA
 # ==========================================
 
-@st.cache_data
-def _ler_excel_vcra(
-    caminho: str,
-    modificacao: float,
-    tamanho: int,
-    aba: str
-) -> pd.DataFrame:
+def criar_conexao_athena():
+    """
+    Ponto de integração da conexão com Athena.
 
-    return pd.read_excel(
-        caminho,
-        sheet_name=aba,
-        engine="openpyxl",
-        header=8
+    A conexão deve utilizar o mecanismo de autenticação
+    autorizado no ambiente corporativo.
+
+    Não inserir credenciais diretamente neste arquivo.
+    """
+
+    raise NotImplementedError(
+        "Configure aqui a conexão corporativa com o Amazon Athena."
     )
 
 
 # ==========================================
-# CONVERTER CABEÇALHOS DO VCRA
+# CONSULTA SQL AWS
+# ==========================================
+
+SQL_VCRA = """
+SELECT
+    -- Manter aqui as colunas anteriores do SELECT original.
+
+    POSICAO.codigo_emitente AS "Emitente",
+    POSICAO.sigla_sistema_origem AS "Sistema",
+    POSICAO.valor_pu AS "PU Atual",
+    POSICAO.indicador_negociacao_vencimento AS "Indicador",
+    LASTRO.codigo_lastro AS "Lastro"
+
+FROM
+    db_corp_custodiademercadodecapitais_hubdadosinvesmentservices_sor_01.tbih3_posicao_fundo_renda_fixa POSICAO
+
+LEFT JOIN
+    db_corp_custodiademercadodecapitais_hubdadosinvesmentservices_sor_01.tbih3_cadastro_ativo_lastro_renda_fixa LASTRO
+    ON POSICAO.codigo_ativo_lastro = LASTRO.codigo_lastro
+    AND POSICAO.sigla_sistema_origem = LASTRO.sigla_sistema_origem
+"""
+
+
+# ==========================================
+# NORMALIZAR RESULTADO DA CONSULTA AWS
 # ==========================================
 
 def converter_vcra(base):
@@ -759,60 +777,70 @@ def converter_vcra(base):
         "QUANTIDADETOTAL": "Quantidade",
         "VALORPU": "PU Atual",
         "CODIGOSISTEMA": "Sistema",
+        "SIGLASISTEMAORIGEM": "Sistema",
         "INDICADORNEGOCIACAOVENCIMENTO": "Indicador"
     }
 
-    return base.rename(columns=mapeamento)
+    base = base.rename(columns=mapeamento)
+
+    return base
 
 
 # ==========================================
-# CARREGAR BASE VCRA
+# CARREGAR POSIÇÕES DIRETAMENTE DA AWS
 # ==========================================
 
-def carregar_vcra():
+@st.cache_data(ttl=300, show_spinner="Consultando posições na AWS...")
+def _consultar_vcra_aws():
 
-    caminho = DATA_DIR / "Base_VCRA.xlsm"
-    avisos = []
-
-    if not caminho.exists():
-
-        return pd.DataFrame(
-            columns=COLUNAS_VCRA
-        ), [
-            "Arquivo Base_VCRA.xlsm não encontrado na pasta data."
-        ]
+    conn = None
 
     try:
 
-        modificacao = caminho.stat().st_mtime
-        tamanho = caminho.stat().st_size
+        conn = criar_conexao_athena()
 
-        base = _ler_excel_vcra(
-            str(caminho),
-            modificacao,
-            tamanho,
-            "VCRA"
-        ).copy()
+        base = pd.read_sql(
+            SQL_VCRA,
+            conn
+        )
+
+        return base, []
+
+    except Exception as erro:
+
+        return pd.DataFrame(), [
+            f"Erro Athena: {erro}"
+        ]
+
+    finally:
+
+        if conn is not None:
+
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def carregar_vcra():
+
+    base, avisos = _consultar_vcra_aws()
+
+    if base.empty:
+
+        return pd.DataFrame(
+            columns=COLUNAS_VCRA
+        ), avisos
+
+    try:
 
         base = converter_vcra(base)
 
-        # Validar colunas obrigatórias.
-        faltantes = [
-            coluna
-            for coluna in COLUNAS_VCRA
-            if coluna not in base.columns
-        ]
+        # Garantir as colunas esperadas pelo RASTRO.
+        for coluna in COLUNAS_VCRA:
 
-        if faltantes:
-
-            return pd.DataFrame(
-                columns=COLUNAS_VCRA
-            ), [
-                (
-                    "Colunas ausentes na base VCRA: "
-                    f"{', '.join(faltantes)}."
-                )
-            ]
+            if coluna not in base.columns:
+                base[coluna] = pd.NA
 
         base = base[COLUNAS_VCRA].copy()
 
@@ -828,20 +856,16 @@ def carregar_vcra():
                 coluna
             )
 
-        # IMPORTANTE:
-        # Algumas exportações do VCRA apresentam a data
-        # somente na primeira linha de cada bloco.
-        # As células abaixo podem ficar vazias ou mescladas.
-        # Preenchemos essas linhas com a última data válida.
-        base["Data de Posição"] = (
-            base["Data de Posição"].ffill()
-        )
+        # Converter valores numéricos.
+        for coluna in [
+            "Quantidade",
+            "PU Atual"
+        ]:
 
-        # Converter quantidade.
-        base["Quantidade"] = pd.to_numeric(
-            base["Quantidade"],
-            errors="coerce"
-        )
+            base[coluna] = pd.to_numeric(
+                base[coluna],
+                errors="coerce"
+            )
 
         # Normalizar textos.
         for coluna in [
@@ -849,7 +873,9 @@ def carregar_vcra():
             "Operação",
             "Tipo do Ativo",
             "Emitente",
-            "Sistema"
+            "Sistema",
+            "Indicador",
+            "Lastro"
         ]:
 
             base[coluna] = (
@@ -859,12 +885,11 @@ def carregar_vcra():
                 .str.strip()
             )
 
-        # Remover registros sem data de posição.
+        # Remover somente registros sem data de posição.
         base = base.dropna(
             subset=["Data de Posição"]
         ).copy()
 
-        # Identificar todas as datas diferentes.
         datas_identificadas = sorted(
             base["Data de Posição"]
             .dt.normalize()
@@ -875,7 +900,7 @@ def carregar_vcra():
         if len(datas_identificadas) == 0:
 
             avisos.append(
-                "Nenhuma data de posição válida foi encontrada no VCRA."
+                "Nenhuma data de posição válida foi encontrada na consulta AWS."
             )
 
         elif len(datas_identificadas) == 1:
@@ -885,21 +910,15 @@ def carregar_vcra():
             ).strftime("%d/%m/%Y")
 
             avisos.append(
-                "O VCRA foi carregado, mas contém somente uma "
-                f"data de posição identificada: {data_unica}."
+                "A consulta AWS retornou somente uma data de posição: "
+                f"{data_unica}."
             )
 
         else:
 
-            datas_texto = [
-                pd.Timestamp(data).strftime("%d/%m/%Y")
-                for data in datas_identificadas
-            ]
-
             avisos.append(
-                f"VCRA carregado: {len(datas_identificadas)} "
-                "datas de posição identificadas: "
-                + ", ".join(datas_texto)
+                f"AWS carregada: {len(datas_identificadas)} "
+                "datas de posição identificadas."
             )
 
         return base, avisos
@@ -909,5 +928,5 @@ def carregar_vcra():
         return pd.DataFrame(
             columns=COLUNAS_VCRA
         ), [
-            f"Erro ao carregar a base VCRA: {erro}"
+            f"Erro ao preparar os dados retornados pelo Athena: {erro}"
         ]

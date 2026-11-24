@@ -78,7 +78,7 @@ def normalizar_chave(valor):
 def normalizar_emitente(valor):
 
     """
-    Normaliza o CNPJ do emitente.
+    Normaliza o código do emitente.
 
     Remove pontos, barras, traços e espaços para evitar
     diferenças de formatação na identificação do ativo.
@@ -122,9 +122,22 @@ def organizar_posicoes(df):
         + ["Quantidade"]
     )
 
+    colunas_ausentes = [
+        coluna
+        for coluna in colunas_necessarias
+        if coluna not in df.columns
+    ]
+
+    if colunas_ausentes:
+        raise ValueError(
+            "A consulta de posições não retornou as colunas "
+            "necessárias para a comparação: "
+            + ", ".join(colunas_ausentes)
+        )
+
     dados = df[colunas_necessarias].copy()
 
-    # Normalizar campos utilizados na comparação
+    # Normalizar campos utilizados na comparação.
 
     for coluna in CHAVES_IDENTIDADE + CHAVES_LOCALIZACAO:
 
@@ -145,7 +158,7 @@ def organizar_posicoes(df):
         errors="coerce"
     ).fillna(0)
 
-    # Agrupar registros com a mesma identidade e localização
+    # Agrupar registros com a mesma identidade e localização.
 
     agrupado = (
         dados
@@ -272,7 +285,7 @@ def identificar_movimentacoes(posicao_anterior, posicao_atual):
         origens = []
         destinos = []
 
-        # Identificar reduções e aumentos
+        # Identificar reduções e aumentos.
 
         for local in todos_locais:
 
@@ -374,7 +387,6 @@ def identificar_movimentacoes(posicao_anterior, posicao_atual):
 
         # ======================================
         # DISTRIBUIR QUANTIDADES
-        # QUANDO HÁ UMA ÚNICA ORIGEM
         # ======================================
 
         indice_destino = 0
@@ -717,8 +729,8 @@ def exibir_consulta_posicao(df, identificador):
     ).copy()
 
     st.caption(
-        "Consulte os registros da posição usando os filtros abaixo. "
-        "São exibidos até 100 registros por página."
+        "Consulte os registros da posição retornada pela AWS "
+        "usando os filtros abaixo. São exibidos até 100 registros por página."
     )
 
     st.markdown("**Filtros da posição**")
@@ -818,9 +830,12 @@ def tela_rastreamento():
     st.title("Rastreamento de Movimentações")
 
     st.caption(
-        "Compare posições do VCRA para identificar alterações "
-        "nas operações e quantidades."
+        "Compare posições retornadas pela consulta AWS para "
+        "identificar alterações nas operações e quantidades."
     )
+
+    # Mantido temporariamente por compatibilidade com dados.py.
+    # A função deverá retornar os dados da consulta AWS.
 
     df, avisos = carregar_vcra()
 
@@ -829,11 +844,39 @@ def tela_rastreamento():
 
     if df.empty:
 
-        st.info("Nenhuma posição disponível na base VCRA.")
+        st.info(
+            "Nenhuma posição disponível na consulta AWS."
+        )
+        return
+
+    if "Data de Posição" not in df.columns:
+
+        st.error(
+            "A coluna Data de Posição não foi encontrada "
+            "no resultado da consulta AWS."
+        )
+        return
+
+    df = df.copy()
+
+    df["Data de Posição"] = pd.to_datetime(
+        df["Data de Posição"],
+        errors="coerce"
+    )
+
+    df = df[
+        df["Data de Posição"].notna()
+    ].copy()
+
+    if df.empty:
+
+        st.warning(
+            "A consulta AWS não retornou datas de posição válidas."
+        )
         return
 
     datas = sorted(
-        df["Data de Posição"].dropna().dt.date.unique()
+        df["Data de Posição"].dt.date.unique()
     )
 
     if len(datas) < 2:
@@ -870,7 +913,7 @@ def tela_rastreamento():
             format_func=lambda data: data.strftime("%d/%m/%Y")
         )
 
-    # Impedir comparação invertida ou da mesma data
+    # Impedir comparação invertida ou da mesma data.
 
     if data_anterior >= data_atual:
 
@@ -922,10 +965,17 @@ def tela_rastreamento():
 
     st.subheader("Movimentações identificadas")
 
-    resultado = identificar_movimentacoes(
-        posicao_anterior,
-        posicao_atual
-    )
+    try:
+
+        resultado = identificar_movimentacoes(
+            posicao_anterior,
+            posicao_atual
+        )
+
+    except ValueError as erro:
+
+        st.error(str(erro))
+        return
 
     if resultado.empty:
 
